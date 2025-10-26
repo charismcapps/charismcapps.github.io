@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>eShepherd</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+  <!--1. Link Vue Javascript & Konva-->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/konva@9/konva.min.js"></script>
+  <!--2. Link VueKonva Javascript -->
+  <script src="https://unpkg.com/vue-konva@3/dist/vue-konva.umd.js"></script>
+  <!-- Replace Tailwind CDN with a local installation or CLI setup for production -->
+  <style>
+    #app {
+      display: flex;
+      height: 100vh;
+      flex-direction: column;
+    }
+    .main-content {
+      display: flex;
+      flex: 1;
+      margin-top: 40px; /* Account for fixed header height */
+    }
+    .directory-pane {
+      width: 25.0%;
+      min-width: 200px;
+      max-width: 50%;
+      background-color: white;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      overflow: auto;
+    }
+    .resizer {
+      width: 5px;
+      cursor: ew-resize;
+      background-color: #ccc;
+    }
+    .image-pane {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      overflow: auto;
+      height: calc(100vh - 40px); /* Full height minus header */
+    }
+    .image-pane img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #3498db;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 2s linear infinite;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .loading-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+    }
+    .file-item {
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div id="app">
+    <!-- Top Banner -->
+    <header class="fixed top-0 inset-x-0 h-10 bg-gray-800 text-white grid grid-cols-3 items-center px-3 text-sm shadow z-10">
+      <div class="flex items-center">
+        <button v-if="user" @click="toggleSidebar" class="flex items-center gap-1 rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 active:bg-gray-500">
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 6h16v2H4V6Zm0 5h10v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
+          <span>{{ sidebarCollapsed ? 'Show Files' : 'Hide Files' }}</span>
+        </button>
+      </div>
+      <div class="text-center font-semibold tracking-wide text-orange-500">eShepherd</div>
+      <div class="flex justify-end">
+        <button v-if="user" @click="signOut" class="text-xs text-gray-300 hover:text-white">Sign Out</button>
+      </div>
+    </header>
+    
+    <!-- Main Content Area -->
+    <div class="main-content">
+      <!-- Left Pane: Directory Tree -->
+      <div :class="['directory-pane text-xs transition-all duration-200 bg-blue-50', { 'border-r border-gray-200': !sidebarCollapsed }]" :style="sidebarCollapsed ? { width: '0px', minWidth: '0px' } : { minWidth: '200px' }" id="directoryPane">
+        <div v-show="!sidebarCollapsed && user">
+          <directory-tree :nodes="directoryTree" :selected-file="selectedFile" :is-root-level="true" @select="onSelectNode"></directory-tree>
+        </div>
+      </div>
+
+      <!-- Resizer -->
+      <div class="resizer" id="resizer" v-show="!sidebarCollapsed && user"></div>
+
+      <!-- Right Pane: Image Display / Sign-in -->
+      <div class="image-pane bg-gray-50">
+        <!-- Sign-in UI -->
+        <div v-if="!user && !loading" class="flex items-center justify-center h-full bg-gray-50">
+          <div class="text-center">
+            <h1 class="text-2xl font-bold text-gray-900 mb-4">eShepherd</h1>
+            <p class="text-gray-600 mb-6">Sign in to view your images</p>
+            <button @click="signIn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+              Sign in with Google
+            </button>
+            <div v-if="error" class="mt-4 text-red-600">{{ error }}</div>
+          </div>
+        </div>
+
+        <!-- Loading UI -->
+        <div v-if="loading" class="flex items-center justify-center h-full bg-gray-50">
+          <div class="text-center">
+            <div class="spinner mx-auto mb-4"></div>
+            <p class="text-gray-600">Loading...</p>
+          </div>
+        </div>
+
+        <!-- Image Display UI -->
+        <div v-if="user && !loading">
+          <div class="w-full border-b border-gray-200 bg-gray-50 px-2 py-1 flex items-center justify-center gap-1">
+            <button
+              :disabled="!hasPrevImage"
+              @click="goPrevImage"
+              class="inline-flex items-center gap-1 rounded bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 shadow px-1.5 py-0.5 text-[11px]"
+            >
+              <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12.03 15.53a.75.75 0 0 1-1.06 0l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 1 1 1.06 1.06L8.56 10l3.47 3.47a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd"/></svg>
+              Prev
+            </button>
+            <button
+              :disabled="!hasNextImage"
+              @click="goNextImage"
+              class="inline-flex items-center gap-1 rounded bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 shadow px-1.5 py-0.5 text-[11px]"
+            >
+              Next
+              <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M7.97 4.47a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1 0 1.06l-4.5 4.5a.75.75 0 1 1-1.06-1.06L11.44 10 7.97 6.53a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"/></svg>
+            </button>
+            <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys</span>
+          </div>
+          <div class="flex-1 w-full flex items-center justify-center bg-gray-50">
+            <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" @update="onUpdateAnnotations"></image-annotation>
+            <p v-else class="text-gray-500">Select a file to view the image</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyAd9QCOrxuVFD3I-kmyY4-ZvNRCSibdb8I",
+      authDomain: "charisfriends-54cf3.firebaseapp.com",
+      databaseURL: "https://charisfriends-54cf3.firebaseio.com",
+      projectId: "charisfriends-54cf3",
+      storageBucket: "charisfriends-54cf3.firebasestorage.app",
+      messagingSenderId: "12705856594",
+      appId: "1:12705856594:web:a4bafa9cbaf7423690738b"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+
+    const VueKonva = window['vue-konva'].default;
+    const app = Vue.createApp({
+      data() {
+        return {
+          directoryTree: [],
+          selectedImage: null,
+          selectedFile: null,
+          annotations: [],
+          currentFolderFiles: [],
+          currentFileIndex: -1,
+          sidebarCollapsed: false,
+          user: null,
+          loading: true,
+          error: null
+        };
+      },
+      methods: {
+        async signIn() {
+          try {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            const result = await auth.signInWithPopup(provider);
+            this.user = result.user;
+            this.error = null;
+            await this.fetchDirectoryTree();
+          } catch (error) {
+            console.error('Sign in error:', error);
+            this.error = 'Sign in failed: ' + error.message;
+          }
+        },
+        async signOut() {
+          try {
+            await auth.signOut();
+            this.user = null;
+            this.directoryTree = [];
+            this.selectedImage = null;
+            this.selectedFile = null;
+          } catch (error) {
+            console.error('Sign out error:', error);
+          }
+        },
+        toggleSidebar() {
+          this.sidebarCollapsed = !this.sidebarCollapsed;
+        },
+        updateFolderContextFromSelected(node) {
+          // Find parent and its file list; then set current index
+          const result = this.findParentAndIndexByMediaLink(this.directoryTree, node.url, null);
+          if (result && result.parent) {
+            const files = result.parent.children.filter(child => child.type === 'file');
+            const idx = files.findIndex(f => f.url === node.url);
+            this.currentFolderFiles = files;
+            this.currentFileIndex = idx;
+          } else {
+            this.currentFolderFiles = [];
+            this.currentFileIndex = -1;
+          }
+        },
+        findParentAndIndexByMediaLink(nodes, url, parent) {
+          if (!nodes) return null;
+          for (const n of nodes) {
+            if (n.type === 'file' && n.url === url) {
+              return { parent, node: n };
+            }
+            if (n.children && n.children.length) {
+              const res = this.findParentAndIndexByMediaLink(n.children, url, n);
+              if (res) return res;
+            }
+          }
+          return null;
+        },
+        async fetchDirectoryTree() {
+          if (!this.user) return;
+          
+          try {
+            this.loading = true;
+            const idToken = await this.user.getIdToken();
+            
+            const response = await fetch('https://eshepherd-auth-and-retrieve-files-g7egpip7ea-as.a.run.app', {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${idToken}`,
+                'Content-Type': 'application/json'
+              }
+            });
+
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            if (data.success) {
+              this.directoryTree = this.transformToTree(data.items);
+            } else {
+              throw new Error(data.error || 'Failed to fetch data');
+            }
+          } catch (error) {
+            console.error('Error fetching directory tree:', error);
+            this.error = 'Failed to load images: ' + error.message;
+          } finally {
+            this.loading = false;
+          }
+        },
+        transformToTree(data) {
+          const tree = {};
+          data.forEach(item => {
+            const parts = item.name.split('/');
+            let current = tree;
+            parts.forEach((part, index) => {
+              if (!current[part]) {
+                current[part] = {
+                  name: part,
+                  children: {},
+                  type: index === parts.length - 1 ? item.type : 'directory',
+                  url: item.url,
+                  expiry_timestamp: item.expiry_timestamp,
+                  expiry_unix: item.expiry_unix
+                };
+              }
+              current = current[part].children;
+            });
+          });
+          const convertToArray = (node, isRootLevel = false) => {
+            const children = Object.values(node).map(child => {
+              return {
+                ...child,
+                children: convertToArray(child.children)
+              };
+            });
+            
+            // Sort directories first, then files
+            return children.sort((a, b) => {
+              if (a.type === 'directory' && b.type === 'file') return -1;
+              if (a.type === 'file' && b.type === 'directory') return 1;
+              
+              // For directories, sort by name in descending order (latest first)
+              if (a.type === 'directory' && b.type === 'directory') {
+                return b.name.localeCompare(a.name);
+              }
+              
+              // For files, sort alphabetically
+              return a.name.localeCompare(b.name);
+            });
+          };
+          return convertToArray(tree, true);
+        },
+        onSelectNode(node) {
+          if (node.type === 'file') {
+            this.selectedImage = node.url;
+            this.selectedFile = node;
+            this.updateFolderContextFromSelected(node);
+          }
+        },
+        goPrevImage() {
+          if (this.currentFileIndex > 0) {
+            const newIndex = this.currentFileIndex - 1;
+            const nextFile = this.currentFolderFiles[newIndex];
+            if (nextFile) {
+              this.selectedImage = nextFile.url;
+              this.selectedFile = nextFile;
+              this.currentFileIndex = newIndex;
+            }
+          }
+        },
+        goNextImage() {
+          if (this.currentFileIndex >= 0 && this.currentFileIndex < this.currentFolderFiles.length - 1) {
+            const newIndex = this.currentFileIndex + 1;
+            const nextFile = this.currentFolderFiles[newIndex];
+            if (nextFile) {
+              this.selectedImage = nextFile.url;
+              this.selectedFile = nextFile;
+              this.currentFileIndex = newIndex;
+            }
+          }
+        },
+        onUpdateAnnotations(newAnnotations) {
+          this.annotations = newAnnotations;
+        },
+        setupKeyboardNavigation() {
+          document.addEventListener('keydown', this.handleKeydown);
+        },
+        handleKeydown(event) {
+          // Only handle arrow keys when user is logged in and not loading
+          if (!this.user || this.loading) return;
+          
+          // Don't handle if user is typing in an input field
+          if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') return;
+          
+          switch(event.key) {
+            case 'ArrowLeft':
+              event.preventDefault();
+              if (this.hasPrevImage) {
+                this.goPrevImage();
+              }
+              break;
+            case 'ArrowRight':
+              event.preventDefault();
+              if (this.hasNextImage) {
+                this.goNextImage();
+              }
+              break;
+          }
+        }
+      },
+      computed: {
+        hasPrevImage() {
+          return this.currentFileIndex > 0;
+        },
+        hasNextImage() {
+          return this.currentFileIndex >= 0 && this.currentFileIndex < this.currentFolderFiles.length - 1;
+        }
+      },
+      mounted() {
+        // Listen for authentication state changes
+        auth.onAuthStateChanged((user) => {
+          this.user = user;
+          this.loading = false;
+          if (user) {
+            this.fetchDirectoryTree();
+          }
+        });
+        
+        // Add keyboard navigation
+        this.setupKeyboardNavigation();
+      },
+      beforeUnmount() {
+        // Clean up keyboard event listeners
+        document.removeEventListener('keydown', this.handleKeydown);
+      },
+    });
+
+    app.component('directory-tree', {
+      props: ['nodes', 'selectedFile', 'isRootLevel'],
+      data() {
+        return {
+          collapsed: {} // Track collapsed state for directories
+        };
+      },
+      mounted() {
+        this.setupInitialExpansion();
+      },
+      watch: {
+        nodes: {
+          handler() {
+            this.setupInitialExpansion();
+          },
+          immediate: true
+        }
+      },
+      methods: {
+        setupInitialExpansion() {
+          // Auto-expand the first (latest) date folder at root level
+          if (this.isRootLevel && this.nodes && this.nodes.length > 0) {
+            console.log('Setting up initial expansion for root level with', this.nodes.length, 'nodes');
+            const firstNode = this.nodes[0];
+            console.log('First node:', firstNode);
+            if (firstNode.type === 'directory') {
+              console.log('Expanding first directory:', firstNode.name);
+              this.collapsed[firstNode.name] = false; // Expand the latest date folder
+            }
+            // Collapse all other directories at root level
+            this.nodes.slice(1).forEach(node => {
+              if (node.type === 'directory') {
+                console.log('Collapsing directory:', node.name);
+                this.collapsed[node.name] = true; // Collapse other date folders
+              }
+            });
+            console.log('Final collapsed state:', this.collapsed);
+          }
+        },
+        toggleCollapse(node) {
+          this.collapsed = { ...this.collapsed, [node.name]: !this.collapsed[node.name] };
+        },
+        isCollapsed(node) {
+          // For directories, check if explicitly set in collapsed object
+          if (node.type === 'directory') {
+            if (this.collapsed[node.name] === undefined) {
+              return true; // Default to collapsed if not explicitly set
+            }
+            return this.collapsed[node.name]; // Return the explicit value (true/false)
+          }
+          return false; // Files are never collapsed
+        },
+        isSelected(node) {
+          return this.selectedFile && this.selectedFile.name === node.name && this.selectedFile.mediaLink === node.mediaLink;
+        }
+      },
+      template: `
+        <ul class="select-none">
+          <li v-for="node in nodes" :key="node.name" class="">
+            <div v-if="node.type === 'directory'" @click="toggleCollapse(node)" class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 text-gray-800 text-sm leading-tight font-[Arial_Narrow,Arial,sans-serif]">
+              <svg :class="['h-4 w-4 text-gray-500 transform transition-transform', { 'rotate-0': isCollapsed(node), '-rotate-90': !isCollapsed(node) }]" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fill-rule="evenodd" d="M12.03 5.47a.75.75 0 0 1 0 1.06L9.06 9.5l2.97 2.97a.75.75 0 1 1-1.06 1.06l-3.5-3.5a.75.75 0 0 1 0-1.06l3.5-3.5a.75.75 0 0 1 1.06 0Z" clip-rule="evenodd" />
+              </svg>
+              <svg class="h-4 w-4 text-amber-500" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M10 4H4a2 2 0 0 0-2 2v1h20V8a2 2 0 0 0-2-2h-8l-2-2Z"/>
+                <path d="M22 9H2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9Z"/>
+              </svg>
+              <span class="font-medium truncate">{{ node.name }}</span>
+            </div>
+            <div v-else @click="$emit('select', node)" :class="['group flex items-center gap-2 pl-9 pr-2 py-1.5 cursor-pointer hover:bg-blue-50 text-xs leading-tight font-[Arial_Narrow,Arial,sans-serif]', { 'bg-blue-100 text-blue-800': isSelected(node), 'text-gray-700': !isSelected(node) } ]">
+              <svg class="h-4 w-4 text-gray-400 group-hover:text-blue-500" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z"/>
+              </svg>
+              <span class="truncate">{{ node.name }}</span>
+            </div>
+
+            <transition name="fade" mode="out-in">
+              <div v-show="!isCollapsed(node) && node.children.length" class="ml-4 border-l border-gray-200">
+                <directory-tree :nodes="node.children" :selected-file="selectedFile" :is-root-level="false" @select="$emit('select', $event)"></directory-tree>
+              </div>
+            </transition>
+          </li>
+        </ul>`
+    });
+
+    app.component('image-annotation', {
+      props: ['imageSrc', 'annotations'],
+      template: `<div class="w-full h-full flex items-center justify-center">
+        <div v-if="isLoading" class="loading-container">
+          <div class="spinner"></div>
+          <p>Loading image...</p>
+        </div>
+        <v-stage v-else :config="stageConfig">
+          <v-layer>
+            <v-image :config="imageConfig"></v-image>
+            <v-rect v-for="(box, index) in annotations" :key="index" :config="box"></v-rect>
+          </v-layer>
+        </v-stage>
+      </div>`,
+      data() {
+        return {
+          stageConfig: { width: 800, height: 600 },
+          imageConfig: { image: null, x: 0, y: 0, width: 800, height: 600 },
+          isLoading: false,
+          containerWidth: 0,
+          containerHeight: 0
+        };
+      },
+      watch: {
+        imageSrc: {
+          handler(newSrc) {
+            if (!newSrc) return;
+            this.loadImage(newSrc);
+          },
+          immediate: true
+        }
+      },
+      mounted() {
+        this.$nextTick(() => {
+          this.updateDimensions();
+        });
+        window.addEventListener('resize', this.updateDimensions);
+      },
+      beforeUnmount() {
+        window.removeEventListener('resize', this.updateDimensions);
+      },
+      methods: {
+        updateDimensions() {
+          // Get the image pane container dimensions
+          const imagePane = document.querySelector('.image-pane');
+          if (imagePane) {
+            this.containerWidth = imagePane.clientWidth;
+            this.containerHeight = imagePane.clientHeight;
+            console.log('Container dimensions:', this.containerWidth, 'x', this.containerHeight);
+            this.calculateOptimalSize();
+          } else {
+            console.log('Image pane not found');
+          }
+        },
+        calculateOptimalSize() {
+          // Use most of the available space, leaving some padding
+          const padding = 20;
+          const availableWidth = Math.max(400, this.containerWidth - padding);
+          const availableHeight = Math.max(300, this.containerHeight - padding);
+          
+          console.log('Calculating optimal size:', {
+            containerWidth: this.containerWidth,
+            containerHeight: this.containerHeight,
+            availableWidth,
+            availableHeight,
+            hasImage: !!this.imageConfig.image
+          });
+          
+          // If we have an image loaded, use its natural dimensions
+          if (this.imageConfig.image) {
+            const img = this.imageConfig.image;
+            const imageAspectRatio = img.naturalWidth / img.naturalHeight;
+            const containerAspectRatio = availableWidth / availableHeight;
+            
+            console.log('Image dimensions:', {
+              naturalWidth: img.naturalWidth,
+              naturalHeight: img.naturalHeight,
+              imageAspectRatio,
+              containerAspectRatio
+            });
+            
+            let width, height;
+            
+            if (containerAspectRatio > imageAspectRatio) {
+              // Container is wider than image - fit to height
+              height = availableHeight;
+              width = height * imageAspectRatio;
+            } else {
+              // Container is taller than image - fit to width
+              width = availableWidth;
+              height = width / imageAspectRatio;
+            }
+            
+            // Ensure we don't exceed container bounds
+            if (width > availableWidth) {
+              width = availableWidth;
+              height = width / imageAspectRatio;
+            }
+            if (height > availableHeight) {
+              height = availableHeight;
+              width = height * imageAspectRatio;
+            }
+            
+            console.log('Calculated dimensions:', { width, height });
+            
+            // Update stage and image config
+            this.stageConfig = { width: Math.floor(width), height: Math.floor(height) };
+            this.imageConfig = { 
+              ...this.imageConfig, 
+              width: Math.floor(width), 
+              height: Math.floor(height) 
+            };
+          } else {
+            // Default size when no image is loaded
+            const defaultWidth = Math.min(800, availableWidth);
+            const defaultHeight = Math.min(600, availableHeight);
+            
+            this.stageConfig = { width: defaultWidth, height: defaultHeight };
+            this.imageConfig = { 
+              ...this.imageConfig, 
+              width: defaultWidth, 
+              height: defaultHeight 
+            };
+          }
+        },
+        loadImage(imageSrc) {
+          this.isLoading = true;
+          console.log('Loading image from URL:', imageSrc);
+          
+          const img = new Image();
+          img.crossOrigin = 'anonymous'; // Enable CORS for signed URLs
+          img.onload = () => {
+            console.log('Image loaded successfully, dimensions:', img.naturalWidth, 'x', img.naturalHeight);
+            this.imageConfig.image = img;
+            this.isLoading = false;
+            // Recalculate dimensions after image loads with proper sizing
+            this.$nextTick(() => {
+              this.updateDimensions();
+            });
+          };
+          img.onerror = (error) => {
+            console.error('Error loading image:', error);
+            this.isLoading = false;
+          };
+          img.src = imageSrc; // Use the signed URL directly
+        }
+      }
+    });
+
+    app.use(VueKonva);
+    const vueApp = app.mount('#app');
+
+    // Setup resizer functionality after Vue app is mounted
+    function setupResizer() {
+      const resizer = document.getElementById('resizer');
+      const directoryPane = document.getElementById('directoryPane');
+      const mainContent = document.querySelector('.main-content');
+
+      // Check if elements exist before adding event listeners
+      if (!resizer || !directoryPane || !mainContent) {
+        console.log('Some DOM elements not found, skipping resizer setup');
+        return;
+      }
+
+      let isResizing = false;
+      let startX = 0;
+      let startWidth = 0;
+
+      resizer.addEventListener('mousedown', (e) => {
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = directoryPane.offsetWidth;
+        document.body.style.cursor = 'ew-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (!isResizing) return;
+
+        const deltaX = e.clientX - startX;
+        const newWidth = startWidth + deltaX;
+        const minWidth = 200;
+        const maxWidth = mainContent.offsetWidth * 0.7; // Max 70% of content width
+
+        if (newWidth >= minWidth && newWidth <= maxWidth) {
+          directoryPane.style.width = `${newWidth}px`;
+        }
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (isResizing) {
+          isResizing = false;
+          document.body.style.cursor = 'default';
+          document.body.style.userSelect = '';
+        }
+      });
+
+      // Prevent text selection during resize
+      resizer.addEventListener('selectstart', (e) => {
+        e.preventDefault();
+      });
+    }
+
+    // Setup resizer after Vue app is mounted with a delay to ensure DOM is ready
+    setTimeout(setupResizer, 100);
+  </script>
+</body>
+</html>
