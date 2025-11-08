@@ -29,6 +29,10 @@
       display: flex;
       flex: 1;
       margin-top: 40px; /* Account for fixed header height */
+      transition: margin-top 0.3s ease;
+    }
+    .main-content.banner-hidden {
+      margin-top: 0;
     }
     .directory-pane {
       width: 25.0%;
@@ -85,7 +89,7 @@
 <body class="bg-gray-100">
   <div id="app">
     <!-- Top Banner -->
-    <header class="fixed top-0 inset-x-0 h-10 bg-gray-800 text-white grid grid-cols-3 items-center px-3 text-sm shadow z-10">
+    <header :class="['fixed top-0 inset-x-0 h-10 bg-gray-800 text-white grid grid-cols-3 items-center px-3 text-sm shadow z-10 transition-transform duration-300', { '-translate-y-full': !bannerVisible }]">
       <div class="flex items-center">
         <button v-if="user" @click="toggleSidebar" class="flex items-center gap-1 rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 active:bg-gray-500">
           <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 6h16v2H4V6Zm0 5h10v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
@@ -99,7 +103,7 @@
     </header>
     
     <!-- Main Content Area -->
-    <div class="main-content">
+    <div :class="['main-content', { 'banner-hidden': !bannerVisible }]">
       <!-- Left Pane: Sessions Dropdown -->
       <div :class="['directory-pane text-xs transition-all duration-200 bg-blue-50', { 'border-r border-gray-200': !sidebarCollapsed }]" :style="sidebarCollapsed ? { width: '0px', minWidth: '0px' } : { minWidth: '200px' }" id="directoryPane">
         <div v-show="!sidebarCollapsed && user" class="p-3" style="position: relative; z-index: 1;">
@@ -153,7 +157,7 @@
           <div class="w-full border-b border-gray-200 bg-gray-50 px-2 py-1 flex items-center justify-center gap-1">
             <button
               :disabled="!hasPrevImage"
-              @click="goPrevImage"
+              @click="bannerVisible = true; goPrevImage()"
               class="inline-flex items-center gap-1 rounded bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 shadow px-1.5 py-0.5 text-[11px]"
             >
               <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12.03 15.53a.75.75 0 0 1-1.06 0l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 1 1 1.06 1.06L8.56 10l3.47 3.47a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd"/></svg>
@@ -161,7 +165,7 @@
             </button>
             <button
               :disabled="!hasNextImage"
-              @click="goNextImage"
+              @click="bannerVisible = true; goNextImage()"
               class="inline-flex items-center gap-1 rounded bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 shadow px-1.5 py-0.5 text-[11px]"
             >
               Next
@@ -169,7 +173,7 @@
             </button>
             <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys</span>
           </div>
-          <div class="flex-1 w-full flex items-center justify-center bg-gray-50 relative">
+          <div class="flex-1 w-full flex items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
             <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" @update="onUpdateAnnotations" @loading-change="imageLoading = $event"></image-annotation>
             <p v-else class="text-gray-500">Select a session to view images</p>
             <div v-if="selectedImage && currentFolderFiles.length > 0 && !imageLoading" class="absolute top-4 right-4 bg-black bg-opacity-50 text-white px-3 py-1.5 rounded text-sm font-medium">
@@ -216,7 +220,11 @@
           user: null,
           loading: true,
           imageLoading: false,
-          error: null
+          error: null,
+          touchStartX: null,
+          touchStartY: null,
+          bannerVisible: true,
+          isSwipe: false
         };
       },
       methods: {
@@ -250,6 +258,7 @@
         },
         toggleSidebar() {
           this.sidebarCollapsed = !this.sidebarCollapsed;
+          this.bannerVisible = true; // Show banner when interacting with UI
         },
         updateFolderContextFromSelected(node) {
           // Find parent and its file list; then set current index
@@ -474,6 +483,7 @@
           // Find the session by name
           const session = this.sessions.find(s => s.name === this.selectedSessionName);
           if (session) {
+            this.bannerVisible = true; // Show banner when selecting session
             this.onSelectSession(session);
           }
         },
@@ -619,6 +629,69 @@
               }
               break;
           }
+        },
+        handleTouchStart(event) {
+          // Only handle touches when user is logged in, not loading, and an image is selected
+          if (!this.user || this.loading || !this.selectedImage) return;
+          
+          // Get the first touch point
+          const touch = event.touches[0];
+          this.touchStartX = touch.clientX;
+          this.touchStartY = touch.clientY;
+          this.isSwipe = false; // Reset swipe flag
+        },
+        handleTouchEnd(event) {
+          // Only handle if we have a start position
+          if (this.touchStartX === null || this.touchStartY === null) return;
+          if (!this.user || this.loading || !this.selectedImage) {
+            this.touchStartX = null;
+            this.touchStartY = null;
+            return;
+          }
+          
+          // Get the end touch point
+          const touch = event.changedTouches[0];
+          const touchEndX = touch.clientX;
+          const touchEndY = touch.clientY;
+          
+          // Calculate the difference
+          const deltaX = touchEndX - this.touchStartX;
+          const deltaY = touchEndY - this.touchStartY;
+          
+          // Minimum swipe distance (in pixels)
+          const minSwipeDistance = 50;
+          
+          // Check if it's a horizontal swipe (more horizontal than vertical)
+          if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > minSwipeDistance) {
+            // Prevent default to avoid any unwanted behavior
+            event.preventDefault();
+            this.isSwipe = true;
+            
+            // Hide banner on swipe
+            this.bannerVisible = false;
+            
+            if (deltaX > 0) {
+              // Swipe right - go to previous image
+              if (this.hasPrevImage) {
+                this.goPrevImage();
+              }
+            } else {
+              // Swipe left - go to next image
+              if (this.hasNextImage) {
+                this.goNextImage();
+              }
+            }
+          } else {
+            // It's a tap (not a swipe) - show banner
+            if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) {
+              // Very small movement, treat as tap
+              this.bannerVisible = !this.bannerVisible;
+            }
+          }
+          
+          // Reset touch positions
+          this.touchStartX = null;
+          this.touchStartY = null;
         }
       },
       computed: {
