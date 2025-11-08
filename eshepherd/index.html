@@ -20,10 +20,28 @@
   <script src="https://unpkg.com/vue-konva@3/dist/vue-konva.umd.js"></script>
   <!-- Replace Tailwind CDN with a local installation or CLI setup for production -->
   <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      overflow-x: hidden;
+      /* Make page slightly taller to allow scroll */
+      height: 100.1vh;
+      /* Hide scrollbar but allow scrolling */
+      scrollbar-width: none; /* Firefox */
+      -ms-overflow-style: none; /* IE/Edge */
+    }
+
+    html::-webkit-scrollbar, body::-webkit-scrollbar {
+      display: none; /* Chrome/Safari */
+    }
+
     #app {
       display: flex;
       height: 100vh;
+      min-height: 100vh;
       flex-direction: column;
+      /* Add small padding to bottom to enable scroll */
+      padding-bottom: 1px;
     }
     .main-content {
       display: flex;
@@ -91,7 +109,7 @@
     <!-- Top Banner -->
     <header :class="['fixed top-0 inset-x-0 h-10 bg-gray-800 text-white grid grid-cols-3 items-center px-3 text-sm shadow z-10 transition-transform duration-300', { '-translate-y-full': !bannerVisible }]">
       <div class="flex items-center">
-        <button v-if="user" @click="toggleSidebar" class="flex items-center gap-1 rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 active:bg-gray-500">
+        <button v-if="user" @click="toggleSidebar" class="flex items-center gap-1 rounded px-2 py-1 bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-xs">
           <svg class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 6h16v2H4V6Zm0 5h10v2H4v-2Zm0 5h16v2H4v-2Z"/></svg>
           <span>{{ sidebarCollapsed ? 'Show Sessions' : 'Hide Sessions' }}</span>
         </button>
@@ -723,6 +741,28 @@
         }
       },
       mounted() {
+        // Auto-scroll down 1px to trigger URL bar hiding on mobile
+        setTimeout(() => {
+          window.scrollTo(0, 1);
+          // Scroll back to top after a moment (URL bar will stay hidden)
+          setTimeout(() => {
+            window.scrollTo(0, 0);
+          }, 100);
+        }, 100);
+        
+        // Handle orientation changes
+        window.addEventListener('orientationchange', () => {
+          // Re-trigger scroll to hide URL bar after orientation change
+          setTimeout(() => {
+            window.scrollTo(0, 1);
+            setTimeout(() => {
+              window.scrollTo(0, 0);
+            }, 100);
+            // Force resize event
+            window.dispatchEvent(new Event('resize'));
+          }, 300);
+        });
+        
         // Listen for authentication state changes
         auth.onAuthStateChanged((user) => {
           this.user = user;
