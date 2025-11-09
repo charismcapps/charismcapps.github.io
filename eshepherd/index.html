@@ -142,6 +142,22 @@
               {{ session.name }}
             </option>
           </select>
+          
+          <!-- Show Faces Toggle -->
+          <div v-if="selectedFile && selectedFile.model" class="mt-3">
+            <button
+              @click="showFaces = !showFaces"
+              :class="['w-full px-2 py-1 text-xs rounded border transition-colors', showFaces ? 'bg-green-500 text-white border-green-600' : 'bg-gray-200 text-gray-700 border-gray-300 hover:bg-gray-300']"
+            >
+              {{ showFaces ? 'Hide Faces' : 'Show Faces' }}
+            </button>
+          </div>
+          
+          <!-- Model JSON Display -->
+          <div v-if="selectedFile && selectedFile.model" class="mt-4">
+            <label class="block text-xs font-semibold text-gray-600 mb-2">Model</label>
+            <pre class="text-xs bg-white border border-gray-300 rounded-md p-2 overflow-auto max-h-96 whitespace-pre-wrap break-words font-mono text-gray-700">{{ formatModel(selectedFile.model) }}</pre>
+          </div>
         </div>
       </div>
 
@@ -192,7 +208,7 @@
             <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys</span>
           </div>
           <div class="flex-1 w-full flex items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
-            <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" @update="onUpdateAnnotations" @loading-change="imageLoading = $event"></image-annotation>
+            <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" @update="onUpdateAnnotations" @loading-change="imageLoading = $event"></image-annotation>
             <p v-else class="text-gray-500">Select a session to view images</p>
             <div v-if="selectedImage && currentFolderFiles.length > 0 && !imageLoading" class="absolute top-4 right-4 bg-black bg-opacity-50 text-white px-3 py-1.5 rounded text-sm font-medium">
               {{ currentFileIndex + 1 }}/{{ currentFolderFiles.length }}
@@ -242,7 +258,8 @@
           touchStartX: null,
           touchStartY: null,
           bannerVisible: true,
-          isSwipe: false
+          isSwipe: false,
+          showFaces: false
         };
       },
       methods: {
@@ -384,18 +401,20 @@
             urlMap[item.name] = {
               url: item.url,
               expiry_timestamp: item.expiry_timestamp,
-              expiry_unix: item.expiry_unix
+              expiry_unix: item.expiry_unix,
+              model: item.model
             };
           });
           
           // Recursively update URLs in the tree
           const updateNode = (node) => {
-            if (node.type === 'file' && urlMap[node.name]) {
-              const newData = urlMap[node.name];
-              node.url = newData.url;
-              node.expiry_timestamp = newData.expiry_timestamp;
-              node.expiry_unix = newData.expiry_unix;
-            }
+              if (node.type === 'file' && urlMap[node.name]) {
+                const newData = urlMap[node.name];
+                node.url = newData.url;
+                node.expiry_timestamp = newData.expiry_timestamp;
+                node.expiry_unix = newData.expiry_unix;
+                node.model = newData.model;
+              }
             if (node.children && Array.isArray(node.children)) {
               node.children.forEach(child => updateNode(child));
             }
@@ -411,6 +430,7 @@
                 file.url = newData.url;
                 file.expiry_timestamp = newData.expiry_timestamp;
                 file.expiry_unix = newData.expiry_unix;
+                file.model = newData.model;
               }
             });
           }
@@ -431,6 +451,7 @@
                 file.url = updatedFile.url;
                 file.expiry_timestamp = updatedFile.expiry_timestamp;
                 file.expiry_unix = updatedFile.expiry_unix;
+                file.model = updatedFile.model;
                 return updatedFile.url;
               }
             }
@@ -465,7 +486,8 @@
                   type: index === parts.length - 1 ? item.type : 'directory',
                   url: item.url,
                   expiry_timestamp: item.expiry_timestamp,
-                  expiry_unix: item.expiry_unix
+                  expiry_unix: item.expiry_unix,
+                  model: item.model
                 };
               }
               current = current[part].children;
@@ -570,6 +592,22 @@
           } catch (error) {
             console.error('Error parsing timestamp from filename:', error);
             return null;
+          }
+        },
+        formatModel(model) {
+          if (!model) return '';
+          
+          try {
+            // If model is already a string, try to parse it as JSON
+            if (typeof model === 'string') {
+              const parsed = JSON.parse(model);
+              return JSON.stringify(parsed, null, 2);
+            }
+            // If model is an object, stringify it with formatting
+            return JSON.stringify(model, null, 2);
+          } catch (error) {
+            // If parsing fails, return as string
+            return typeof model === 'string' ? model : String(model);
           }
         },
         selectLatestSession() {
@@ -867,7 +905,7 @@
     });
 
     app.component('image-annotation', {
-      props: ['imageSrc', 'annotations'],
+      props: ['imageSrc', 'annotations', 'selectedFile', 'showFaces'],
       template: `<div class="w-full h-full flex items-center justify-center">
         <div v-if="isLoading" class="loading-container">
           <div class="spinner"></div>
@@ -876,7 +914,8 @@
         <v-stage v-else :config="stageConfig">
           <v-layer>
             <v-image :config="imageConfig"></v-image>
-            <v-rect v-for="(box, index) in annotations" :key="index" :config="box"></v-rect>
+            <v-rect v-for="(box, index) in facialAreaBoxes" :key="index" :config="box"></v-rect>
+            <v-rect v-for="(box, index) in annotations" :key="'annotation-' + index" :config="box"></v-rect>
           </v-layer>
         </v-stage>
       </div>`,
@@ -889,6 +928,61 @@
           containerHeight: 0
         };
       },
+      computed: {
+        facialAreaBoxes() {
+          // Return empty array if showFaces is false
+          if (!this.showFaces) {
+            return [];
+          }
+          
+          if (!this.selectedFile || !this.selectedFile.model || !this.imageConfig.image) {
+            return [];
+          }
+          
+          try {
+            const model = typeof this.selectedFile.model === 'string' 
+              ? JSON.parse(this.selectedFile.model) 
+              : this.selectedFile.model;
+            
+            if (!model.embeddings || !Array.isArray(model.embeddings)) {
+              return [];
+            }
+            
+            const img = this.imageConfig.image;
+            const naturalWidth = img.naturalWidth;
+            const naturalHeight = img.naturalHeight;
+            const displayWidth = this.imageConfig.width;
+            const displayHeight = this.imageConfig.height;
+            
+            // Calculate scale factors
+            const scaleX = displayWidth / naturalWidth;
+            const scaleY = displayHeight / naturalHeight;
+            
+            return model.embeddings
+              .filter(embedding => embedding.facial_area)
+              .map((embedding, index) => {
+                const area = embedding.facial_area;
+                const x = (area.x || 0) * scaleX;
+                const y = (area.y || 0) * scaleY;
+                const width = (area.w || 0) * scaleX;
+                const height = (area.h || 0) * scaleY;
+                
+                return {
+                  x: x,
+                  y: y,
+                  width: width,
+                  height: height,
+                  stroke: '#00ff00',
+                  strokeWidth: 2,
+                  fill: 'transparent'
+                };
+              });
+          } catch (error) {
+            console.error('Error parsing facial areas from model:', error);
+            return [];
+          }
+        }
+      },
       watch: {
         imageSrc: {
           handler(newSrc) {
@@ -896,6 +990,24 @@
             this.loadImage(newSrc);
           },
           immediate: true
+        },
+        selectedFile: {
+          handler() {
+            // Recalculate boxes when file changes
+            this.$nextTick(() => {
+              // Force update by accessing the computed property
+              this.$forceUpdate();
+            });
+          }
+        },
+        imageConfig: {
+          handler() {
+            // Recalculate boxes when image dimensions change
+            this.$nextTick(() => {
+              this.$forceUpdate();
+            });
+          },
+          deep: true
         }
       },
       mounted() {
@@ -978,6 +1090,11 @@
               width: Math.floor(width), 
               height: Math.floor(height) 
             };
+            
+            // Force update to recalculate facial area boxes with new dimensions
+            this.$nextTick(() => {
+              this.$forceUpdate();
+            });
           } else {
             // Default size when no image is loaded
             const defaultWidth = Math.min(800, availableWidth);
