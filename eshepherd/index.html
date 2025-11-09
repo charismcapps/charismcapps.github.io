@@ -144,7 +144,7 @@
           </select>
           
           <!-- Show Faces Toggle -->
-          <div v-if="selectedFile && selectedFile.model" class="mt-3">
+          <div v-if="selectedFile && selectedFile.model_url" class="mt-3">
             <button
               @click="showFaces = !showFaces"
               :class="['w-full px-2 py-1 text-xs rounded border transition-colors', showFaces ? 'bg-green-500 text-white border-green-600' : 'bg-gray-200 text-gray-700 border-gray-300 hover:bg-gray-300']"
@@ -154,9 +154,11 @@
           </div>
           
           <!-- Model JSON Display -->
-          <div v-if="selectedFile && selectedFile.model" class="mt-4">
+          <div v-if="selectedFile && selectedFile.model_url" class="mt-4">
             <label class="block text-xs font-semibold text-gray-600 mb-2">Model</label>
-            <pre class="text-xs bg-white border border-gray-300 rounded-md p-2 overflow-auto max-h-96 whitespace-pre-wrap break-words font-mono text-gray-700">{{ formatModel(selectedFile.model) }}</pre>
+            <div v-if="selectedFile.model === null" class="text-xs text-gray-500 p-2 bg-gray-50 rounded border border-gray-200">Loading model data...</div>
+            <pre v-else-if="selectedFile.model" class="text-xs bg-white border border-gray-300 rounded-md p-2 overflow-auto max-h-96 whitespace-pre-wrap break-words font-mono text-gray-700">{{ formatModel(selectedFile.model) }}</pre>
+            <div v-else class="text-xs text-red-500 p-2 bg-red-50 rounded border border-red-200">Failed to load model data</div>
           </div>
         </div>
       </div>
@@ -402,7 +404,7 @@
               url: item.url,
               expiry_timestamp: item.expiry_timestamp,
               expiry_unix: item.expiry_unix,
-              model: item.model
+              model_url: item.model_url
             };
           });
           
@@ -413,7 +415,9 @@
                 node.url = newData.url;
                 node.expiry_timestamp = newData.expiry_timestamp;
                 node.expiry_unix = newData.expiry_unix;
-                node.model = newData.model;
+                node.model_url = newData.model_url;
+                // Clear cached model when URL changes
+                node.model = null;
               }
             if (node.children && Array.isArray(node.children)) {
               node.children.forEach(child => updateNode(child));
@@ -430,7 +434,9 @@
                 file.url = newData.url;
                 file.expiry_timestamp = newData.expiry_timestamp;
                 file.expiry_unix = newData.expiry_unix;
-                file.model = newData.model;
+                file.model_url = newData.model_url;
+                // Clear cached model when URL changes
+                file.model = null;
               }
             });
           }
@@ -451,7 +457,9 @@
                 file.url = updatedFile.url;
                 file.expiry_timestamp = updatedFile.expiry_timestamp;
                 file.expiry_unix = updatedFile.expiry_unix;
-                file.model = updatedFile.model;
+                file.model_url = updatedFile.model_url;
+                // Clear cached model when URL changes
+                file.model = null;
                 return updatedFile.url;
               }
             }
@@ -487,7 +495,8 @@
                   url: item.url,
                   expiry_timestamp: item.expiry_timestamp,
                   expiry_unix: item.expiry_unix,
-                  model: item.model
+                  model_url: item.model_url,
+                  model: null // Will be fetched from model_url when needed
                 };
               }
               current = current[part].children;
@@ -543,6 +552,10 @@
             if (!validUrl) {
               console.error('Failed to get valid URL for file:', files[0].name);
             }
+            // Fetch model data if model_url exists
+            if (files[0].model_url) {
+              this.fetchModelData(files[0]);
+            }
           } else {
             this.currentFileIndex = -1;
             this.selectedFile = null;
@@ -594,6 +607,30 @@
             return null;
           }
         },
+        async fetchModelData(file) {
+          if (!file || !file.model_url) return null;
+          
+          // If model is already cached, return it
+          if (file.model !== null && file.model !== undefined) {
+            return file.model;
+          }
+          
+          try {
+            const response = await fetch(file.model_url);
+            if (!response.ok) {
+              throw new Error(`Failed to fetch model: ${response.status}`);
+            }
+            const modelData = await response.json();
+            // Cache the model data
+            file.model = modelData;
+            return modelData;
+          } catch (error) {
+            console.error('Error fetching model data:', error);
+            // Set to empty object to prevent repeated failed fetches
+            file.model = {};
+            return null;
+          }
+        },
         formatModel(model) {
           if (!model) return '';
           
@@ -625,6 +662,10 @@
             if (!validUrl) {
               console.error('Failed to get valid URL for file:', node.name);
             }
+            // Fetch model data if model_url exists
+            if (node.model_url) {
+              this.fetchModelData(node);
+            }
             this.updateFolderContextFromSelected(node);
           }
         },
@@ -638,6 +679,10 @@
               this.selectedImage = validUrl;
               if (!validUrl) {
                 console.error('Failed to get valid URL for file:', nextFile.name);
+              }
+              // Fetch model data if model_url exists
+              if (nextFile.model_url) {
+                this.fetchModelData(nextFile);
               }
               this.currentFileIndex = newIndex;
             }
@@ -653,6 +698,10 @@
               this.selectedImage = validUrl;
               if (!validUrl) {
                 console.error('Failed to get valid URL for file:', nextFile.name);
+              }
+              // Fetch model data if model_url exists
+              if (nextFile.model_url) {
+                this.fetchModelData(nextFile);
               }
               this.currentFileIndex = newIndex;
             }
@@ -992,10 +1041,19 @@
           immediate: true
         },
         selectedFile: {
-          handler() {
+          handler(newFile, oldFile) {
             // Recalculate boxes when file changes
             this.$nextTick(() => {
               // Force update by accessing the computed property
+              this.$forceUpdate();
+            });
+          },
+          deep: true
+        },
+        'selectedFile.model': {
+          handler() {
+            // Recalculate boxes when model data is loaded
+            this.$nextTick(() => {
               this.$forceUpdate();
             });
           }
