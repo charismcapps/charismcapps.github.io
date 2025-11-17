@@ -191,6 +191,7 @@
           <div v-if="selectedBoundingBoxIndex !== null && labellingStarted" class="mt-3">
             <label class="block text-xs font-semibold text-gray-600 mb-2">Search for Person</label>
             <input
+              ref="searchInput"
               v-model="searchQuery"
               @input="performSearch"
               @keydown="handleSearchKeydown"
@@ -222,19 +223,46 @@
             </div>
           </div>
           
-          <!-- Selected Face Label JSON -->
+          <!-- Selected Face Label -->
           <div v-if="selectedBoundingBoxIndex !== null && getCurrentFaceLabel()" class="mt-3">
-            <div class="flex items-center justify-between mb-2">
-              <label class="block text-xs font-semibold text-gray-600">Selected Label</label>
-              <button
-                @click="clearCurrentFaceLabel"
-                class="text-xs text-red-600 hover:text-red-800 hover:bg-red-50 px-2 py-1 rounded border border-red-300"
-                title="Clear label"
-              >
-                ✕
-              </button>
+            <label class="block text-xs font-semibold text-gray-600 mb-2">Check-In Persons</label>
+            
+            <!-- Selected Person -->
+            <div class="mb-2">
+              <div class="flex items-center justify-between px-2">
+                <span class="text-xs text-gray-800">{{ getCurrentFaceLabel().name }}</span>
+                <input
+                  type="checkbox"
+                  :checked="getSelectedPersonCheckedState()"
+                  @change="handleSelectedPersonCheckboxChange"
+                  :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPersonCheckedState() ? 'opacity-50' : '']"
+                />
+              </div>
             </div>
-            <pre class="text-xs bg-white border border-gray-300 rounded-md p-2 overflow-auto max-h-40 whitespace-pre-wrap break-words font-mono text-gray-700">{{ formatModel(getCurrentFaceLabel()) }}</pre>
+            
+            <!-- Household Groups -->
+            <div v-if="getHouseholdGroups(getCurrentFaceLabel()).length > 0" class="space-y-2">
+              <div
+                v-for="(group, groupIndex) in getHouseholdGroups(getCurrentFaceLabel())"
+                :key="groupIndex"
+                class="border border-gray-300 rounded bg-gray-50 py-1"
+              >
+                <div
+                  v-for="(member, memberIndex) in group.members"
+                  :key="member.id || memberIndex"
+                  class="flex items-center justify-between py-1 px-2"
+                >
+                  <span :class="['text-xs', getSelectedPersonCheckedState() ? 'text-gray-700' : 'text-gray-400']">{{ member.name }}</span>
+                  <input
+                    type="checkbox"
+                    :checked="getHouseholdCheckboxState(member.id)"
+                    @change="handleHouseholdCheckboxChange(member.id, $event)"
+                    :disabled="!getSelectedPersonCheckedState()"
+                    :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPersonCheckedState() ? 'opacity-50 cursor-not-allowed' : '']"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
           
           <!-- Model JSON Display -->
@@ -291,7 +319,7 @@
               Next
               <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M7.97 4.47a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1 0 1.06l-4.5 4.5a.75.75 0 1 1-1.06-1.06L11.44 10 7.97 6.53a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"/></svg>
             </button>
-            <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys</span>
+            <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys<span v-if="selectedBoundingBoxIndex !== null">, Tab for next box, ESC to deselect</span></span>
           </div>
           <div class="flex-1 w-full flex items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
             <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" :face-labels="faceLabels" :selected-bounding-box-index="selectedBoundingBoxIndex" :get-face-label-key="getFaceLabelKey" @update="onUpdateAnnotations" @loading-change="imageLoading = $event" @face-box-click="onFaceBoxClick"></image-annotation>
@@ -356,7 +384,10 @@
           searchResults: [],
           selectedSearchIndex: -1, // Index of the highlighted search result
           currentSessionLabels: {}, // Store labels for current session
-          searchResultRefs: {} // Refs to search result elements for scrolling
+          searchResultRefs: {}, // Refs to search result elements for scrolling
+          selectedPersonChecked: true, // Track if selected person checkbox is checked
+          householdCheckboxes: {}, // Track household member checkboxes state (local to current selection)
+          checkedPeople: {} // Global list of checked people (person ID -> true/false) per session
         };
       },
       methods: {
@@ -714,9 +745,10 @@
         async onSelectSession(session) {
           this.selectedSession = session;
           this.selectedSessionName = session.name;
-          // Clear labels when session changes
+          // Clear labels and checked people when session changes
           this.faceLabels = {};
           this.currentSessionLabels = {};
+          this.checkedPeople = {};
           // Get all files from this session (recursively)
           const files = this.getAllFilesFromNode(session);
           this.currentFolderFiles = files;
@@ -918,10 +950,37 @@
           this.annotations = newAnnotations;
         },
         onFaceBoxClick(embeddingIndex) {
-          this.selectedBoundingBoxIndex = embeddingIndex;
-          this.searchQuery = '';
-          this.searchResults = [];
-          this.selectedSearchIndex = -1;
+          // Toggle selection - if clicking the same box, deselect it
+          if (this.selectedBoundingBoxIndex === embeddingIndex) {
+            this.selectedBoundingBoxIndex = null;
+            this.searchQuery = '';
+            this.searchResults = [];
+            this.selectedSearchIndex = -1;
+            this.selectedPersonChecked = true;
+            this.householdCheckboxes = {};
+          } else {
+            this.selectedBoundingBoxIndex = embeddingIndex;
+            this.searchQuery = '';
+            this.searchResults = [];
+            this.selectedSearchIndex = -1;
+            // Initialize checkboxes from global list if there's already a label
+            const currentLabel = this.getCurrentFaceLabel();
+            if (currentLabel) {
+              // Check global list for selected person's checked state
+              this.selectedPersonChecked = this.isPersonChecked(currentLabel.id);
+              this.initializeHouseholdCheckboxes(currentLabel);
+            } else {
+              // No label yet, default to checked
+              this.selectedPersonChecked = true;
+              this.householdCheckboxes = {};
+            }
+            // Focus the search input
+            this.$nextTick(() => {
+              if (this.$refs.searchInput) {
+                this.$refs.searchInput.focus();
+              }
+            });
+          }
         },
         performSearch() {
           if (!this.searchQuery || this.searchQuery.trim() === '') {
@@ -957,6 +1016,28 @@
           });
           
           return householdMembers;
+        },
+        getHouseholdGroups(person) {
+          if (!person || !person.household_ids || !Array.isArray(person.household_ids) || person.household_ids.length === 0) {
+            return [];
+          }
+          
+          // Group people by each household_id
+          const groups = person.household_ids.map(householdId => {
+            // Find all people who share this specific household_id, excluding the selected person
+            const members = this.planningCentrePeople.filter(p => {
+              if (!p.household_ids || !Array.isArray(p.household_ids)) return false;
+              // Exclude the selected person from household members
+              return p.id !== person.id && p.household_ids.includes(householdId);
+            });
+            
+            return {
+              householdId: householdId,
+              members: members
+            };
+          });
+          
+          return groups;
         },
         getHouseholdMembersDisplay(person) {
           const members = this.getHouseholdMembers(person);
@@ -1051,14 +1132,95 @@
               if (key) {
                 this.faceLabels[key] = person;
                 this.currentSessionLabels[key] = person;
+                // Mark selected person as checked in global list
+                if (person.id) {
+                  this.checkedPeople[person.id] = true;
+                }
+                // Initialize checkbox states from global list
+                this.selectedPersonChecked = this.isPersonChecked(person.id);
+                this.initializeHouseholdCheckboxes(person);
               }
             }
             // Clear search
             this.searchQuery = '';
             this.searchResults = [];
             this.selectedSearchIndex = -1;
-            // Keep the selection active so the JSON is displayed
+            // Remove focus from search input so 'n' key can be used
+            this.$nextTick(() => {
+              if (this.$refs.searchInput) {
+                this.$refs.searchInput.blur();
+              }
+            });
           }
+        },
+        initializeHouseholdCheckboxes(person) {
+          // Initialize household checkboxes from global checked list
+          this.householdCheckboxes = {};
+          const groups = this.getHouseholdGroups(person);
+          groups.forEach(group => {
+            group.members.forEach(member => {
+              if (member.id) {
+                // Check global list for checked state
+                this.householdCheckboxes[member.id] = this.isPersonChecked(member.id);
+              }
+            });
+          });
+        },
+        isPersonChecked(personId) {
+          // Check if person is checked in global list
+          return personId ? (this.checkedPeople[personId] || false) : false;
+        },
+        handleSelectedPersonCheckboxChange(event) {
+          const currentLabel = this.getCurrentFaceLabel();
+          if (currentLabel && currentLabel.id) {
+            const checked = event.target.checked;
+            // Update local state
+            this.selectedPersonChecked = checked;
+            // Update global checked list
+            this.checkedPeople[currentLabel.id] = checked;
+            
+            if (!checked) {
+              // Uncheck all household checkboxes in global list
+              const groups = this.getHouseholdGroups(currentLabel);
+              groups.forEach(group => {
+                group.members.forEach(member => {
+                  if (member.id) {
+                    this.checkedPeople[member.id] = false;
+                  }
+                });
+              });
+              // Update local checkboxes
+              this.householdCheckboxes = {};
+            } else {
+              // When re-checking, restore household checkbox states from global list
+              this.initializeHouseholdCheckboxes(currentLabel);
+            }
+          }
+        },
+        handleHouseholdCheckboxChange(memberId, event) {
+          if (memberId) {
+            const checked = event.target.checked;
+            // Update local checkbox state
+            this.householdCheckboxes[memberId] = checked;
+            // Update global checked list
+            this.checkedPeople[memberId] = checked;
+          }
+        },
+        getHouseholdCheckboxState(memberId) {
+          // Check global list first, then local state
+          if (memberId && this.checkedPeople.hasOwnProperty(memberId)) {
+            return this.checkedPeople[memberId];
+          }
+          return this.householdCheckboxes[memberId] || false;
+        },
+        getSelectedPersonCheckedState() {
+          const currentLabel = this.getCurrentFaceLabel();
+          if (currentLabel && currentLabel.id) {
+            // Check global list for selected person's checked state
+            return this.isPersonChecked(currentLabel.id);
+          }
+          // Fallback to local state if no label
+          return this.selectedPersonChecked;
         },
         getFacialAreaForIndex(embeddingIndex) {
           if (!this.selectedFile || !this.selectedFile.model) return null;
@@ -1107,8 +1269,28 @@
           // Only handle arrow keys when user is logged in and not loading
           if (!this.user || this.loading) return;
           
-          // Don't handle if user is typing in an input field or textarea
+          // Handle ESC key to deselect bounding box (works even in input fields)
+          if (event.key === 'Escape' && this.selectedBoundingBoxIndex !== null) {
+            event.preventDefault();
+            this.selectedBoundingBoxIndex = null;
+            this.searchQuery = '';
+            this.searchResults = [];
+            this.selectedSearchIndex = -1;
+            this.selectedPersonChecked = true;
+            this.householdCheckboxes = {};
+            return;
+          }
+          
+          // Handle 'Tab' key to go to next bounding box (works even in input fields when box is selected)
+          if (event.key === 'Tab' && this.selectedBoundingBoxIndex !== null && this.showFaces && this.selectedFile && this.selectedFile.model) {
+            event.preventDefault();
+            this.goToNextBoundingBox();
+            return;
+          }
+          
+          // Don't handle if user is typing in an input field or textarea (except ESC and Tab)
           if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') {
+            // ESC and Tab keys are handled above, but for other keys, return early
             // Allow arrow keys in search input to be handled by handleSearchKeydown
             return;
           }
@@ -1126,6 +1308,66 @@
                 this.goNextImage();
               }
               break;
+          }
+        },
+        goToNextBoundingBox() {
+          if (!this.selectedFile || !this.selectedFile.model) return;
+          
+          try {
+            const model = typeof this.selectedFile.model === 'string' 
+              ? JSON.parse(this.selectedFile.model) 
+              : this.selectedFile.model;
+            
+            if (!model.embeddings || !Array.isArray(model.embeddings)) {
+              return;
+            }
+            
+            // Get all embedding indices that have facial areas
+            const embeddingsWithFaces = model.embeddings
+              .map((embedding, idx) => ({ embedding, index: idx }))
+              .filter(({ embedding }) => embedding.facial_area);
+            
+            if (embeddingsWithFaces.length === 0) return;
+            
+            // Find current index in the list
+            const currentIndex = embeddingsWithFaces.findIndex(
+              ({ index }) => index === this.selectedBoundingBoxIndex
+            );
+            
+            if (currentIndex === -1) {
+              // Current selection not found, select first one
+              this.selectedBoundingBoxIndex = embeddingsWithFaces[0].index;
+            } else {
+              // Go to next, wrap around if at end
+              const nextIndex = (currentIndex + 1) % embeddingsWithFaces.length;
+              this.selectedBoundingBoxIndex = embeddingsWithFaces[nextIndex].index;
+            }
+            
+            // Reset search and focus input
+            this.searchQuery = '';
+            this.searchResults = [];
+            this.selectedSearchIndex = -1;
+            
+            // Initialize checkboxes from global list if there's already a label
+            const currentLabel = this.getCurrentFaceLabel();
+            if (currentLabel) {
+              // Check global list for selected person's checked state
+              this.selectedPersonChecked = this.isPersonChecked(currentLabel.id);
+              this.initializeHouseholdCheckboxes(currentLabel);
+            } else {
+              // No label yet, default to checked
+              this.selectedPersonChecked = true;
+              this.householdCheckboxes = {};
+            }
+            
+            // Focus the search input
+            this.$nextTick(() => {
+              if (this.$refs.searchInput) {
+                this.$refs.searchInput.focus();
+              }
+            });
+          } catch (error) {
+            console.error('Error navigating to next bounding box:', error);
           }
         },
         handleTouchStart(event) {
@@ -1367,7 +1609,9 @@
           imageConfig: { image: null, x: 0, y: 0, width: 800, height: 600 },
           isLoading: false,
           containerWidth: 0,
-          containerHeight: 0
+          containerHeight: 0,
+          selectedBoxOpacity: 1,
+          blinkInterval: null
         };
       },
       computed: {
@@ -1420,16 +1664,25 @@
                 hasLabel = key ? !!this.faceLabels[key] : false;
               }
               
-              // Color logic: Red if selected, Blue if labelled, Green if not labelled
-              let strokeColor = '#00ff00'; // Green - Not Labelled (default)
+              // Color logic: Amber for unlabelled, Soft Green for labelled
+              // Selected boxes blink with color based on label status
+              let strokeColor = '#FFD700'; // Amber - Not Labelled (default)
               let strokeWidth = 2;
+              let opacity = 1;
               
               if (isSelected) {
-                strokeColor = '#ff0000'; // Red - Selected for Labelling
-                strokeWidth = 3;
+                // Selected box: use green if labelled, amber if not labelled
+                strokeColor = hasLabel ? '#10B981' : '#FFD700'; // Soft Green if labelled, Amber if not
+                strokeWidth = 4; // Thicker for visibility
+                opacity = this.selectedBoxOpacity; // Blinking opacity
               } else if (hasLabel) {
-                strokeColor = '#0000ff'; // Blue - Labelled
+                strokeColor = '#10B981'; // Soft Green - Labelled
                 strokeWidth = 2;
+                opacity = 1;
+              } else {
+                strokeColor = '#FFD700'; // Amber - Not Labelled
+                strokeWidth = 2;
+                opacity = 1;
               }
               
               return {
@@ -1440,6 +1693,7 @@
                 stroke: strokeColor,
                 strokeWidth: strokeWidth,
                 fill: 'transparent',
+                opacity: opacity,
                 embeddingIndex: index
               };
             });
@@ -1450,6 +1704,29 @@
         }
       },
       watch: {
+        selectedBoundingBoxIndex: {
+          handler(newVal) {
+            // Start/stop blinking animation when selection changes
+            if (this.blinkInterval) {
+              clearInterval(this.blinkInterval);
+              this.blinkInterval = null;
+            }
+            
+            if (newVal !== null) {
+              // Start blinking animation
+              this.selectedBoxOpacity = 1;
+              this.blinkInterval = setInterval(() => {
+                this.selectedBoxOpacity = this.selectedBoxOpacity === 1 ? 0.3 : 1;
+                // Force update to trigger recomputation of facialAreaBoxes
+                this.$forceUpdate();
+              }, 500); // Blink every 500ms
+            } else {
+              // Stop blinking
+              this.selectedBoxOpacity = 1;
+            }
+          },
+          immediate: false
+        },
         imageSrc: {
           handler(newSrc) {
             if (!newSrc) return;
@@ -1493,6 +1770,11 @@
       },
       beforeUnmount() {
         window.removeEventListener('resize', this.updateDimensions);
+        // Clean up blinking interval
+        if (this.blinkInterval) {
+          clearInterval(this.blinkInterval);
+          this.blinkInterval = null;
+        }
       },
       methods: {
         handleBoxClick(embeddingIndex) {
