@@ -191,8 +191,15 @@
                   <div class="spinner-small"></div>
                   <span>Scanning Faces...</span>
                 </div>
-                <div v-else-if="getFaceScanningStatus() === 'scanned'" class="text-gray-500">
-                  {{ getFaceScanCount() }} Faces Scanned
+                <div v-else-if="getFaceScanningStatus() === 'scanned'" class="flex items-center justify-between text-gray-500">
+                  <span>{{ getFaceScanCount() }} Faces Scanned</span>
+                  <button
+                    @click="reloadEmbeddingsIndex"
+                    class="ml-2 text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+                    title="Reload embeddings from database"
+                  >
+                    Reload Embeddings
+                  </button>
                 </div>
               </div>
             </div>
@@ -989,9 +996,27 @@
             return null;
           }
         },
+        // Reload embeddings index from Firebase
+        async reloadEmbeddingsIndex() {
+          // Clear current index and cache
+          this.embeddingIndex = null;
+          this.faceMatchCache = {};
+          this.faceScanningStatus = {};
+          this.faceScanCount = {};
+          
+          // Reload embeddings (force reload)
+          await this.loadAllStoredEmbeddings(true);
+          
+          // Rescan faces in current image if available
+          if (this.selectedFile && this.selectedFile.model) {
+            this.$nextTick(() => {
+              this.matchFacesInImage(this.selectedFile);
+            });
+          }
+        },
         // Load all embeddings from Firebase and create EmbeddingIndex
-        async loadAllStoredEmbeddings() {
-          if (this.embeddingIndex !== null) {
+        async loadAllStoredEmbeddings(forceReload = false) {
+          if (this.embeddingIndex !== null && !forceReload) {
             // Already loaded
             return;
           }
@@ -999,7 +1024,7 @@
           try {
             // Dynamically import client-vector-search from esm.sh
             if (!this.ClientVectorSearchModule) {
-              this.ClientVectorSearchModule = await import('https://esm.sh/client-vector-search');
+              this.ClientVectorSearchModule = await import('https://esm.run/client-vector-search');
             }
             
             const { EmbeddingIndex } = this.ClientVectorSearchModule;
