@@ -9,14 +9,14 @@
   <link rel="icon" type="image/png" sizes="16x16" href="eshepherd.png">
   <link rel="apple-touch-icon" href="eshepherd.png">
   <link rel="shortcut icon" href="eshepherd.png">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
   <!-- Client Vector Search Library - loaded dynamically via esm.sh -->
   <!--1. Link Vue Javascript & Konva-->
-  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://unpkg.com/konva@9/konva.min.js"></script>
   <!--2. Link VueKonva Javascript -->
   <script src="https://unpkg.com/vue-konva@3/dist/vue-konva.umd.js"></script>
@@ -215,6 +215,30 @@
               spellcheck="false"
               :class="['w-full px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500', peopleRetrievalStatus === 'retrieving' ? 'bg-gray-100 cursor-not-allowed opacity-60' : '']"
             />
+            <!-- Face Guesses (Top 5 Matches) -->
+            <div v-if="faceGuesses.length > 0 && !searchQuery" class="mt-2 border border-gray-200 rounded-md overflow-hidden">
+              <div class="px-2 py-1 bg-gray-100 border-b border-gray-200">
+                <span class="text-xs font-semibold text-gray-600">Top Matches</span>
+              </div>
+              <div>
+                <div
+                  v-for="(guess, index) in faceGuesses"
+                  :key="guess.person.id || index"
+                  @click="selectPerson(guess.person)"
+                  class="px-2 py-1.5 text-xs cursor-pointer border-b border-gray-100 last:border-b-0 hover:bg-blue-50"
+                >
+                  <div class="flex items-center justify-between">
+                    <div class="flex items-center flex-1 min-w-0">
+                      <span class="font-medium">{{ guess.person.name }}</span>
+                      <span v-if="getHouseholdMembers(guess.person).length > 0" class="ml-2 text-gray-500 text-[10px]">
+                        [{{ getHouseholdMembersDisplay(guess.person) }}]
+                      </span>
+                    </div>
+                    <span class="text-gray-600 ml-2 flex-shrink-0">{{ (guess.similarity * 100).toFixed(1) }}%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
             <!-- Search Results -->
             <div v-if="searchResults.length > 0" ref="searchResultsContainer" class="mt-2 border border-gray-200 rounded-md overflow-hidden search-results-scroll" style="max-height: 108px; overflow-y: auto; scrollbar-width: thin;">
               <div
@@ -241,7 +265,7 @@
             <!-- Selected Person -->
             <div class="mb-2">
               <div class="flex items-center justify-between px-2">
-                <span class="text-xs text-gray-800">{{ getCurrentFaceLabel().name }}</span>
+                <span class="text-xs text-gray-800">{{ getCurrentFaceLabel().name }} ({{ getCurrentFaceLabel().id }})</span>
                 <input
                   type="checkbox"
                   :checked="getSelectedPersonCheckedState()"
@@ -253,7 +277,7 @@
             
             <!-- Embeddings Stored -->
             <div class="mb-2 px-2 flex items-center justify-between">
-              <span class="text-xs text-gray-600">{{ getEmbeddingsCountDisplay() }} Embeddings Found in DB</span>
+              <span class="text-xs text-gray-600">{{ getMatchDisplayText() }}</span>
               <button
                 @click="handleStoreEmbeddings"
                 :disabled="checkingEmbeddingInDB || getEmbeddingsStoredState()"
@@ -262,7 +286,7 @@
                 <span v-if="checkingEmbeddingInDB" class="flex items-center gap-1">
                   <div class="spinner-small"></div>
                 </span>
-                <span v-else>{{ getEmbeddingsStoredState() ? 'Embedding Saved' : 'Add This Embedding' }}</span>
+                <span v-else>{{ getEmbeddingsStoredState() ? 'Embedding Saved' : 'Add This Embedding [a]' }}</span>
               </button>
             </div>
             
@@ -291,13 +315,6 @@
             </div>
           </div>
           
-          <!-- Model JSON Display -->
-          <div v-if="selectedFile && selectedFile.model_url" class="mt-4">
-            <label class="block text-xs font-semibold text-gray-600 mb-2">Model</label>
-            <div v-if="selectedFile.model === null" class="text-xs text-gray-500 p-2 bg-gray-50 rounded border border-gray-200">Loading model data...</div>
-            <pre v-else-if="selectedFile.model" class="text-xs bg-white border border-gray-300 rounded-md p-2 overflow-auto max-h-96 whitespace-pre-wrap break-words font-mono text-gray-700">{{ formatModel(selectedFile.model) }}</pre>
-            <div v-else class="text-xs text-red-500 p-2 bg-red-50 rounded border border-red-200">Failed to load model data</div>
-          </div>
         </div>
       </div>
 
@@ -350,10 +367,10 @@
           <div class="flex-1 w-full flex items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
             <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" :face-labels="faceLabels" :selected-bounding-box-index="selectedBoundingBoxIndex" :get-face-label-key="getFaceLabelKey" @update="onUpdateAnnotations" @loading-change="imageLoading = $event" @face-box-click="onFaceBoxClick"></image-annotation>
             <p v-else class="text-gray-500">Select a session to view images</p>
-            <div v-if="selectedImage && currentFolderFiles.length > 0 && !imageLoading" class="absolute top-4 right-4 bg-black bg-opacity-50 text-white px-3 py-1.5 rounded text-sm font-medium">
+            <div v-if="selectedImage && currentFolderFiles.length > 0 && !imageLoading" class="absolute top-4 right-4 text-white px-3 py-1.5 rounded text-sm font-medium" style="background-color: rgba(0, 0, 0, 0.5);">
               {{ currentFileIndex + 1 }}/{{ currentFolderFiles.length }}
             </div>
-            <div v-if="selectedFile && getImageTimestamp(selectedFile) && !imageLoading" class="absolute top-4 left-4 bg-black bg-opacity-50 text-white px-3 py-1.5 rounded text-sm font-medium">
+            <div v-if="selectedFile && getImageTimestamp(selectedFile) && !imageLoading" class="absolute top-4 left-4 text-white px-3 py-1.5 rounded text-sm font-medium" style="background-color: rgba(0, 0, 0, 0.5);">
               {{ getImageTimestamp(selectedFile) }}
             </div>
           </div>
@@ -410,6 +427,7 @@
           searchQuery: '',
           searchResults: [],
           selectedSearchIndex: -1, // Index of the highlighted search result
+          faceGuesses: [], // Top 5 matches for the selected bounding box: [{person, similarity}]
           currentSessionLabels: {}, // Store labels for current session
           searchResultRefs: {}, // Refs to search result elements for scrolling
           selectedPersonChecked: true, // Track if selected person checkbox is checked
@@ -422,7 +440,7 @@
           embeddingIndex: null, // EmbeddingIndex from client-vector-search
           ClientVectorSearchModule: null, // Store the imported module
           faceMatchCache: {}, // Cache face matches per image: {imageKey: {embeddingIndex: {personId, similarity, person}}}
-          SIMILARITY_THRESHOLD: 0.75, // Cosine similarity threshold for face matching (0.75 is good for face recognition)
+          SIMILARITY_THRESHOLD: 0.80, // Cosine similarity threshold for face matching (0.75 is good for face recognition)
           faceScanningStatus: {}, // Track face scanning status per image: {imageKey: 'scanning' | 'scanned' | null}
           faceScanCount: {} // Track number of faces scanned per image: {imageKey: number}
         };
@@ -1029,6 +1047,121 @@
             this.embeddingIndex = null;
           }
         },
+        // Load top 5 matches for face guesses
+        async loadFaceGuesses() {
+          if (this.selectedBoundingBoxIndex === null || !this.selectedFile || !this.selectedFile.model) {
+            this.faceGuesses = [];
+            return;
+          }
+          
+          try {
+            // Load embedding data for the selected bounding box
+            const model = typeof this.selectedFile.model === 'string' 
+              ? JSON.parse(this.selectedFile.model) 
+              : this.selectedFile.model;
+            
+            if (!model.embeddings || !Array.isArray(model.embeddings)) {
+              this.faceGuesses = [];
+              return;
+            }
+            
+            const embedding = model.embeddings[this.selectedBoundingBoxIndex];
+            if (!embedding || !embedding.embedding || !embedding.facial_area) {
+              this.faceGuesses = [];
+              return;
+            }
+            
+            // Decode embedding if it's base64 encoded
+            let embeddingArray = embedding.embedding;
+            if (typeof embeddingArray === 'string') {
+              embeddingArray = this.decodeEmbeddingFromBase64(embeddingArray);
+              if (!embeddingArray) {
+                this.faceGuesses = [];
+                return;
+              }
+            }
+            
+            // Ensure embeddingArray is a flat array of numbers
+            if (!Array.isArray(embeddingArray)) {
+              this.faceGuesses = [];
+              return;
+            }
+            
+            embeddingArray = embeddingArray.flat(Infinity);
+            
+            // Validate all elements are numbers
+            if (!embeddingArray.every(v => typeof v === 'number' && !isNaN(v) && isFinite(v))) {
+              this.faceGuesses = [];
+              return;
+            }
+            
+            // Load all stored embeddings if not already loaded
+            await this.loadAllStoredEmbeddings();
+            
+            if (!this.embeddingIndex) {
+              this.faceGuesses = [];
+              return;
+            }
+            
+            // Search for top 5 matches
+            const results = await this.embeddingIndex.search(embeddingArray, { topK: 5 });
+            
+            if (!results || results.length === 0) {
+              this.faceGuesses = [];
+              return;
+            }
+            
+            // Process results and match with planningCentrePeople
+            // Use a Map to deduplicate by personId, keeping only the highest similarity
+            const guessesMap = new Map();
+            
+            for (const result of results) {
+              let similarity = result.similarity || result.score || 0;
+              
+              // If distance is provided instead, convert to similarity
+              if (result.distance !== undefined && similarity === 0) {
+                similarity = 1 - result.distance;
+              }
+              
+              // Extract personId
+              let personId = null;
+              if (result.personId) {
+                personId = result.personId;
+              } else if (result.id) {
+                personId = result.id.split('_')[0];
+              } else if (result.object && result.object.personId) {
+                personId = result.object.personId;
+              } else if (result.item && result.item.personId) {
+                personId = result.item.personId;
+              }
+              
+              if (personId) {
+                // Find person in planningCentrePeople
+                const person = this.planningCentrePeople.find(p => p.id === personId);
+                if (person) {
+                  // Check if we already have this person, keep the one with higher similarity
+                  const existing = guessesMap.get(personId);
+                  if (!existing || similarity > existing.similarity) {
+                    guessesMap.set(personId, {
+                      person: person,
+                      similarity: similarity
+                    });
+                  }
+                }
+              }
+            }
+            
+            // Convert Map to array and sort by similarity (descending)
+            const guesses = Array.from(guessesMap.values())
+              .sort((a, b) => b.similarity - a.similarity)
+              .slice(0, 5); // Take top 5 after deduplication
+            
+            this.faceGuesses = guesses;
+          } catch (error) {
+            console.error('Error loading face guesses:', error);
+            this.faceGuesses = [];
+          }
+        },
         // Find best match for an embedding using client-vector-search
         async findBestMatch(queryEmbedding) {
           if (!queryEmbedding) {
@@ -1392,6 +1525,7 @@
             this.searchQuery = '';
             this.searchResults = [];
             this.selectedSearchIndex = -1;
+            this.faceGuesses = [];
             this.selectedPersonChecked = true;
             this.householdCheckboxes = {};
           } else {
@@ -1399,6 +1533,7 @@
             this.searchQuery = '';
             this.searchResults = [];
             this.selectedSearchIndex = -1;
+            this.faceGuesses = []; // Clear previous guesses
             // Initialize checkboxes from global list if there's already a label
             const currentLabel = this.getCurrentFaceLabel();
             if (currentLabel) {
@@ -1428,6 +1563,9 @@
               this.selectedPersonChecked = true;
               this.householdCheckboxes = {};
               this.currentEmbeddingData = null;
+              
+              // Load top 5 matches for guesses
+              this.loadFaceGuesses();
             }
             // Focus the search input
             this.$nextTick(() => {
@@ -1438,6 +1576,9 @@
           }
         },
         performSearch() {
+          // Clear face guesses when user starts typing
+          this.faceGuesses = [];
+          
           if (!this.searchQuery || this.searchQuery.trim() === '') {
             this.searchResults = [];
             this.selectedSearchIndex = -1;
@@ -1579,6 +1720,9 @@
           });
         },
         async selectPerson(person) {
+          // Clear face guesses when a person is selected
+          this.faceGuesses = [];
+          
           if (this.selectedBoundingBoxIndex !== null && this.selectedFile) {
             // Get the facial area for the selected embedding index
             const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
@@ -1699,6 +1843,39 @@
           const currentLabel = this.getCurrentFaceLabel();
           if (!currentLabel || !currentLabel.id) return 0;
           return this.embeddingsCountCache[currentLabel.id] || 0;
+        },
+        getMatchDisplayText() {
+          const currentLabel = this.getCurrentFaceLabel();
+          if (!currentLabel || !currentLabel.id) {
+            return '0 Embeddings in DB';
+          }
+          
+          const embeddingsCount = this.embeddingsCountCache[currentLabel.id] || 0;
+          
+          // Check if there's a match for the current bounding box
+          if (this.selectedBoundingBoxIndex === null || !this.selectedFile || !this.selectedFile.name) {
+            return `${embeddingsCount} Embeddings in DB`;
+          }
+          
+          const imageKey = this.selectedFile.name;
+          const matchCache = this.faceMatchCache[imageKey];
+          
+          if (!matchCache || !matchCache[this.selectedBoundingBoxIndex]) {
+            // No match found for this face
+            return `No Match. ${embeddingsCount} Embeddings in DB`;
+          }
+          
+          const match = matchCache[this.selectedBoundingBoxIndex];
+          
+          // Check if the selected person matches the top match
+          if (match.personId === currentLabel.id) {
+            // Selected person is the top match - show match percentage
+            const matchPercentage = (match.similarity * 100).toFixed(1);
+            return `${matchPercentage}% Match. ${embeddingsCount} Embeddings in DB`;
+          } else {
+            // Selected person is not the top match
+            return `No Match. ${embeddingsCount} Embeddings in DB`;
+          }
         },
         async getEmbeddingsCount() {
           const currentLabel = this.getCurrentFaceLabel();
@@ -1944,9 +2121,20 @@
             return;
           }
           
-          // Don't handle if user is typing in an input field or textarea (except ESC and Tab)
+          // Handle 'a' key to add embedding (only when person is selected and button is enabled)
+          if (event.key === 'a' || event.key === 'A') {
+            const currentLabel = this.getCurrentFaceLabel();
+            if (currentLabel && currentLabel.id && this.currentEmbeddingData && this.user && 
+                !this.checkingEmbeddingInDB && !this.getEmbeddingsStoredState()) {
+              event.preventDefault();
+              this.handleStoreEmbeddings();
+              return;
+            }
+          }
+          
+          // Don't handle if user is typing in an input field or textarea (except ESC, Tab, and 'a')
           if (event.target.tagName === 'INPUT' || event.target.tagName === 'TEXTAREA') {
-            // ESC and Tab keys are handled above, but for other keys, return early
+            // ESC, Tab, and 'a' keys are handled above, but for other keys, return early
             // Allow arrow keys in search input to be handled by handleSearchKeydown
             return;
           }
@@ -2255,6 +2443,10 @@
           <v-layer>
             <v-image :config="imageConfig"></v-image>
             <v-rect v-for="(box, index) in facialAreaBoxes" :key="index" :config="box" @click="handleBoxClick(box.embeddingIndex)"></v-rect>
+            <v-group v-for="(label, index) in nameLabels" :key="'name-' + index" :config="{ x: label.groupX, y: label.groupY }">
+              <v-rect :config="label.bgRect"></v-rect>
+              <v-text :config="label.text"></v-text>
+            </v-group>
             <v-rect v-for="(box, index) in annotations" :key="'annotation-' + index" :config="box"></v-rect>
           </v-layer>
         </v-stage>
@@ -2355,6 +2547,95 @@
             });
           } catch (error) {
             console.error('Error parsing facial areas from model:', error);
+            return [];
+          }
+        },
+        nameLabels() {
+          // Return empty array if showFaces is false
+          if (!this.showFaces || !this.selectedFile || !this.selectedFile.model || !this.faceLabels) {
+            return [];
+          }
+          
+          try {
+            const model = typeof this.selectedFile.model === 'string' 
+              ? JSON.parse(this.selectedFile.model) 
+              : this.selectedFile.model;
+            
+            if (!model.embeddings || !Array.isArray(model.embeddings) || !this.imageConfig.image) {
+              return [];
+            }
+            
+            // Get image dimensions and scale factors
+            const img = this.imageConfig.image;
+            const naturalWidth = img.naturalWidth;
+            const naturalHeight = img.naturalHeight;
+            const displayWidth = this.imageConfig.width;
+            const displayHeight = this.imageConfig.height;
+            
+            const scaleX = displayWidth / naturalWidth;
+            const scaleY = displayHeight / naturalHeight;
+            
+            // Filter embeddings that have facial_area
+            const embeddingsWithFaces = model.embeddings
+              .map((embedding, index) => ({ embedding, index }))
+              .filter(({ embedding }) => embedding.facial_area);
+            
+            return embeddingsWithFaces
+              .map(({ embedding, index }) => {
+                const area = embedding.facial_area;
+                const x = (area.x || 0) * scaleX;
+                const y = (area.y || 0) * scaleY;
+                const width = (area.w || 0) * scaleX;
+                const height = (area.h || 0) * scaleY;
+                
+                // Check if this face has a label
+                let label = null;
+                if (this.selectedFile && this.getFaceLabelKey) {
+                  const key = this.getFaceLabelKey(this.selectedFile.name, area);
+                  label = key ? (this.faceLabels[key] || null) : null;
+                }
+                
+                // Only return label if there's a name
+                if (!label || !label.name) {
+                  return null;
+                }
+                
+                // Position below the bounding box, centered
+                // Calculate approximate text width (rough estimate: 0.6 * fontSize * character count)
+                const fontSize = 12;
+                const padding = 4;
+                const textWidth = label.name.length * fontSize * 0.6; // Approximate width
+                const textHeight = fontSize + padding * 2;
+                
+                // Center the group horizontally below the box
+                const groupX = x + (width - textWidth) / 2 - padding; // Center horizontally
+                const groupY = y + height + 2; // 2px below the box
+                
+                return {
+                  groupX: groupX,
+                  groupY: groupY,
+                  bgRect: {
+                    x: 0,
+                    y: 0,
+                    width: textWidth + padding * 2,
+                    height: textHeight,
+                    fill: 'rgba(0, 0, 0, 0.5)', // Semi-transparent black background
+                    cornerRadius: 2
+                  },
+                  text: {
+                    x: padding,
+                    y: padding,
+                    text: label.name,
+                    fontSize: fontSize,
+                    fontFamily: 'Arial',
+                    fill: '#D3D3D3', // Light grey
+                    align: 'left'
+                  }
+                };
+              })
+              .filter(label => label !== null); // Remove null entries
+          } catch (error) {
+            console.error('Error creating name labels:', error);
             return [];
           }
         }
