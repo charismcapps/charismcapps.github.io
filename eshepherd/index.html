@@ -149,7 +149,7 @@
     <div :class="['main-content', { 'banner-hidden': !bannerVisible }]">
       <!-- Left Pane: Sessions Dropdown -->
       <div :class="['directory-pane text-xs transition-all duration-200 bg-blue-50', { 'border-r border-gray-200': !sidebarCollapsed }]" :style="sidebarCollapsed ? { width: '0px', minWidth: '0px' } : { minWidth: '200px' }" id="directoryPane">
-        <div v-show="!sidebarCollapsed && user" class="p-3" style="position: relative; z-index: 1;">
+        <div v-show="!sidebarCollapsed && user" class="p-3 h-full flex flex-col" style="position: relative; z-index: 1;">
           <label class="block text-xs font-semibold text-gray-600 mb-2">Session</label>
           <select
             v-model="selectedSessionName"
@@ -322,6 +322,18 @@
             </div>
           </div>
           
+          <!-- Check-In Actions -->
+          <div class="mt-auto border-t border-gray-200 pt-4">
+            <button
+              @click="openCheckInOverlay"
+              :disabled="getSelectedCheckInPersonIds().length === 0"
+              class="w-full text-sm font-semibold px-3 py-2 rounded-md border transition-colors"
+              :class="getSelectedCheckInPersonIds().length === 0 ? 'bg-gray-200 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'"
+            >
+              Check In
+            </button>
+          </div>
+          
         </div>
       </div>
 
@@ -329,7 +341,7 @@
       <div class="resizer" id="resizer" v-show="!sidebarCollapsed && user"></div>
 
       <!-- Right Pane: Image Display / Sign-in -->
-      <div class="image-pane bg-gray-50">
+      <div class="image-pane bg-gray-50 relative">
         <!-- Sign-in UI -->
         <div v-if="!user && !loading" class="flex items-center justify-center h-full bg-gray-50">
           <div class="text-center">
@@ -379,6 +391,96 @@
             </div>
             <div v-if="selectedFile && getImageTimestamp(selectedFile) && !imageLoading" class="absolute top-4 left-4 text-white px-3 py-1.5 rounded text-sm font-medium" style="background-color: rgba(0, 0, 0, 0.5);">
               {{ getImageTimestamp(selectedFile) }}
+            </div>
+          </div>
+        </div>
+        
+        <!-- Check-In Overlay -->
+        <div
+          v-if="showCheckInOverlay"
+          class="absolute inset-0 z-50 bg-black bg-opacity-40 flex items-center justify-center px-4 py-6"
+        >
+          <div class="bg-white rounded-lg shadow-2xl w-full max-w-5xl h-full max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
+              <div>
+                <h3 class="text-lg font-semibold text-gray-900">Confirm People to Check In</h3>
+                <p class="text-xs text-gray-500">Review selected people before submitting to Planning Center</p>
+              </div>
+              <button
+                @click="closeCheckInOverlay"
+                class="text-gray-500 hover:text-gray-700 text-xl leading-none"
+                aria-label="Close check-in overlay"
+              >
+                &times;
+              </button>
+            </div>
+            
+            <div class="px-4 py-3 flex flex-wrap items-center gap-3 border-b border-gray-100">
+              <div class="text-sm text-gray-700 font-medium">
+                {{ getOverlaySelectedCount() }} / {{ getCheckInTableData().length }} selected
+              </div>
+              <button
+                @click="toggleCheckInSelectAll"
+                :disabled="getCheckInTableData().length === 0"
+                class="text-sm px-3 py-1.5 rounded border transition-colors"
+                :class="getCheckInTableData().length === 0 ? 'text-gray-400 border-gray-200 cursor-not-allowed bg-gray-100' : (areAllCheckInSelected() ? 'text-gray-700 border-gray-300 bg-gray-100 hover:bg-gray-200' : 'text-blue-600 border-blue-500 hover:bg-blue-50')"
+              >
+                {{ areAllCheckInSelected() ? 'Deselect All' : 'Select All' }}
+              </button>
+              <div class="ml-auto flex items-center gap-2">
+                <button
+                  @click="performCheckIn"
+                  :disabled="getOverlaySelectedCount() === 0 || checkInSubmitting"
+                  class="px-4 py-2 rounded-md text-sm font-semibold text-white flex items-center gap-2"
+                  :class="getOverlaySelectedCount() === 0 || checkInSubmitting ? 'bg-green-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'"
+                >
+                  <div v-if="checkInSubmitting" class="spinner-small"></div>
+                  <span>{{ checkInSubmitting ? 'Checking In...' : 'Submit To Planning Center' }}</span>
+                </button>
+              </div>
+            </div>
+            
+            <div class="px-4 py-2">
+              <p v-if="checkInError" class="text-xs text-red-600">{{ checkInError }}</p>
+              <p v-if="checkInSuccessMessage" class="text-xs text-green-600">{{ checkInSuccessMessage }}</p>
+              <p v-if="getCheckInTableData().length === 0" class="text-xs text-gray-500 mt-1">No people available for check-in yet.</p>
+            </div>
+            
+            <div class="flex-1 px-4 pb-4 w-full">
+              <div class="border border-gray-200 rounded-md h-full flex flex-col overflow-hidden bg-white">
+                <div v-if="getCheckInTableData().length === 0" class="flex-1 flex items-center justify-center text-sm text-gray-500">
+                  Add people from the face labelling panel to prepare check-in.
+                </div>
+                <div v-else class="flex-1 overflow-auto">
+                  <table class="min-w-full text-sm">
+                    <thead class="bg-gray-100 text-gray-600 text-xs uppercase sticky top-0 z-10">
+                      <tr>
+                        <th class="text-left px-3 py-2 w-32">Person ID</th>
+                        <th class="text-left px-3 py-2">Person's Name</th>
+                        <th class="text-center px-3 py-2 w-28">Check In</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="entry in getCheckInTableData()"
+                        :key="entry.person.id"
+                        class="border-b border-gray-100 last:border-b-0"
+                      >
+                        <td class="px-3 py-2 text-xs text-gray-500">{{ entry.person.id }}</td>
+                        <td class="px-3 py-2 text-sm text-gray-800">{{ entry.person.name }}</td>
+                        <td class="px-3 py-2 text-center">
+                          <input
+                            type="checkbox"
+                            :checked="!!checkInOverlaySelection[entry.person.id]"
+                            @change="handleCheckInTableCheckboxChange(entry.person.id, $event)"
+                            class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -449,7 +551,13 @@
           faceMatchCache: {}, // Cache face matches per image: {imageKey: {embeddingIndex: {personId, similarity, person}}}
           SIMILARITY_THRESHOLD: 0.80, // Cosine similarity threshold for face matching (0.75 is good for face recognition)
           faceScanningStatus: {}, // Track face scanning status per image: {imageKey: 'scanning' | 'scanned' | null}
-          faceScanCount: {} // Track number of faces scanned per image: {imageKey: number}
+          faceScanCount: {}, // Track number of faces scanned per image: {imageKey: number}
+          showCheckInOverlay: false, // Control visibility of check-in overlay
+          checkInSubmitting: false, // Track check-in submission state
+          checkInError: null, // Store check-in error messages
+          checkInSuccessMessage: '', // Store success message after check-in
+          checkInOverlaySnapshot: [], // Person IDs captured when opening overlay
+          checkInOverlaySelection: {} // Overlay-specific checkbox states
         };
       },
       methods: {
@@ -1688,6 +1796,162 @@
           }
           
           return display;
+        },
+        getPersonById(personId) {
+          if (!personId || !this.planningCentrePeople || this.planningCentrePeople.length === 0) {
+            return null;
+          }
+          return this.planningCentrePeople.find(person => person.id === personId) || null;
+        },
+        getCheckInTableData() {
+          const entries = [];
+          const addedIds = new Set();
+          const snapshotIds = this.checkInOverlaySnapshot || [];
+          
+          if (!snapshotIds.length) {
+            return entries;
+          }
+          
+          snapshotIds.forEach(personId => {
+            const person = this.getPersonById(personId);
+            if (person && person.id && !addedIds.has(person.id)) {
+              entries.push({ person });
+              addedIds.add(person.id);
+            }
+          });
+          
+          return entries;
+        },
+        areAllCheckInSelected() {
+          const snapshotIds = this.checkInOverlaySnapshot || [];
+          if (snapshotIds.length === 0) {
+            return false;
+          }
+          return snapshotIds.every(personId => this.checkInOverlaySelection[personId]);
+        },
+        toggleCheckInSelectAll() {
+          const snapshotIds = this.checkInOverlaySnapshot || [];
+          if (snapshotIds.length === 0) {
+            return;
+          }
+          const shouldSelectAll = !this.areAllCheckInSelected();
+          snapshotIds.forEach(personId => {
+            this.checkInOverlaySelection[personId] = shouldSelectAll;
+          });
+        },
+        handleCheckInTableCheckboxChange(personId, event) {
+          const checked = event.target.checked;
+          this.checkInOverlaySelection[personId] = checked;
+        },
+        openCheckInOverlay() {
+          const selectedIds = this.getSelectedCheckInPersonIds();
+          if (!selectedIds.length) {
+            return;
+          }
+          this.checkInOverlaySnapshot = [...selectedIds];
+          this.checkInOverlaySelection = {};
+          selectedIds.forEach(personId => {
+            this.checkInOverlaySelection[personId] = true;
+          });
+          this.checkInError = null;
+          this.checkInSuccessMessage = '';
+          this.showCheckInOverlay = true;
+        },
+        closeCheckInOverlay() {
+          this.showCheckInOverlay = false;
+        },
+        getOverlaySelectedCount() {
+          const snapshotIds = this.checkInOverlaySnapshot || [];
+          if (!snapshotIds.length) {
+            return 0;
+          }
+          return snapshotIds.filter(personId => this.checkInOverlaySelection[personId]).length;
+        },
+        getSelectedCheckInPersonIds() {
+          return Object.keys(this.checkedPeople || {}).filter(personId => this.checkedPeople[personId]);
+        },
+        getOverlaySelectedPersonIds() {
+          const snapshotIds = this.checkInOverlaySnapshot || [];
+          return snapshotIds.filter(personId => this.checkInOverlaySelection[personId]);
+        },
+        async performCheckIn() {
+          if (this.checkInSubmitting) {
+            return;
+          }
+          
+          const personIds = this.showCheckInOverlay ? this.getOverlaySelectedPersonIds() : this.getSelectedCheckInPersonIds();
+          if (!personIds.length) {
+            this.checkInError = 'Select at least one person to check in.';
+            this.checkInSuccessMessage = '';
+            return;
+          }
+          
+          if (!this.user) {
+            this.checkInError = 'You must be signed in to perform check-in.';
+            this.checkInSuccessMessage = '';
+            return;
+          }
+          
+          try {
+            this.checkInSubmitting = true;
+            this.checkInError = null;
+            this.checkInSuccessMessage = '';
+            
+            const idToken = await this.user.getIdToken();
+            const payload = {
+              person_ids: personIds,
+              email: this.user.email,
+              uid: this.user.uid
+            };
+            const response = await fetch('https://check-in-to-planning-center-g7egpip7ea-as.a.run.app', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${idToken}`
+              },
+              body: JSON.stringify(payload)
+            });
+            
+            if (!response.ok) {
+              const errorText = await response.text();
+              throw new Error(errorText || `Check-in failed with status ${response.status}`);
+            }
+            
+            const result = await response.json().catch(() => ({}));
+            this.checkInSuccessMessage = result.message || 'Check-in request submitted successfully.';
+            
+            if (result && typeof result === 'object') {
+              const {
+                success,
+                total_persons_received,
+                already_checked_in,
+                people_to_update
+              } = result;
+              
+              const lines = [];
+              if (typeof success !== 'undefined') {
+                lines.push(`Success: ${success ? 'Yes' : 'No'}`);
+              }
+              if (typeof total_persons_received !== 'undefined') {
+                lines.push(`Total persons received: ${total_persons_received}`);
+              }
+              if (typeof already_checked_in !== 'undefined') {
+                lines.push(`Already checked in: ${already_checked_in}`);
+              }
+              if (typeof people_to_update !== 'undefined') {
+                lines.push(`People to update: ${people_to_update}`);
+              }
+              
+              if (lines.length > 0) {
+                alert(lines.join('\n'));
+              }
+            }
+          } catch (error) {
+            console.error('Error performing check-in:', error);
+            this.checkInError = error.message || 'Failed to perform check-in.';
+          } finally {
+            this.checkInSubmitting = false;
+          }
         },
         handleSearchKeydown(event) {
           if (this.searchResults.length === 0) {
