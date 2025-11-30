@@ -206,7 +206,7 @@
           </div>
           
           <!-- Face Search Box -->
-          <div v-if="selectedBoundingBoxIndex !== null && labellingStarted" class="mt-3">
+          <div v-if="(selectedBoundingBoxIndex !== null || selectedPointLabelId !== null) && labellingStarted" class="mt-3">
             <label class="block text-xs font-semibold text-gray-600 mb-2">Search for Person</label>
             <input
               ref="searchInput"
@@ -222,8 +222,8 @@
               spellcheck="false"
               :class="['w-full px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500', peopleRetrievalStatus === 'retrieving' ? 'bg-gray-100 cursor-not-allowed opacity-60' : '']"
             />
-            <!-- Face Guesses (Top 5 Matches) -->
-            <div v-if="faceGuesses.length > 0 && !searchQuery" class="mt-2 border border-gray-200 rounded-md overflow-hidden">
+            <!-- Face Guesses (Top 5 Matches) - Only show for bounding boxes, not point labels -->
+            <div v-if="faceGuesses.length > 0 && !searchQuery && selectedBoundingBoxIndex !== null" class="mt-2 border border-gray-200 rounded-md overflow-hidden">
               <div class="px-2 py-1 bg-gray-100 border-b border-gray-200">
                 <span class="text-xs font-semibold text-gray-600">Top Matches</span>
               </div>
@@ -322,6 +322,48 @@
             </div>
           </div>
           
+          <!-- Point Label Person Selection (without match/embedding display) -->
+          <div v-if="selectedPointLabelId !== null && getCurrentPointLabel()" class="mt-3">
+            <label class="block text-xs font-semibold text-gray-600 mb-2">Check-In Persons</label>
+            
+            <!-- Selected Person -->
+            <div class="mb-2">
+              <div class="flex items-center justify-between px-2">
+                <span class="text-xs text-gray-800">{{ getCurrentPointLabel().name }} ({{ getCurrentPointLabel().id }})</span>
+                <input
+                  type="checkbox"
+                  :checked="getSelectedPointPersonCheckedState()"
+                  @change="handleSelectedPointPersonCheckboxChange"
+                  :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPointPersonCheckedState() ? 'opacity-50' : '']"
+                />
+              </div>
+            </div>
+            
+            <!-- Household Groups -->
+            <div v-if="getHouseholdGroups(getCurrentPointLabel()).length > 0" class="space-y-2">
+              <div
+                v-for="(group, groupIndex) in getHouseholdGroups(getCurrentPointLabel())"
+                :key="groupIndex"
+                class="border border-gray-300 rounded bg-gray-50 py-1"
+              >
+                <div
+                  v-for="(member, memberIndex) in group.members"
+                  :key="member.id || memberIndex"
+                  class="flex items-center justify-between py-1 px-2"
+                >
+                  <span :class="['text-xs', getSelectedPointPersonCheckedState() ? 'text-gray-700' : 'text-gray-400']">{{ member.name }}</span>
+                  <input
+                    type="checkbox"
+                    :checked="getPointHouseholdCheckboxState(member.id)"
+                    @change="handlePointHouseholdCheckboxChange(member.id, $event)"
+                    :disabled="!getSelectedPointPersonCheckedState()"
+                    :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPointPersonCheckedState() ? 'opacity-50 cursor-not-allowed' : '']"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          
           <!-- Check-In Actions -->
           <div class="mt-auto border-t border-gray-200 pt-4">
             <div v-if="selectedSessionName" class="mb-3">
@@ -392,9 +434,14 @@
             </button>
             <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys<span v-if="selectedBoundingBoxIndex !== null">, Tab for next box, ESC to deselect</span></span>
           </div>
-          <div class="flex-1 w-full flex items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
-            <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" :face-labels="faceLabels" :selected-bounding-box-index="selectedBoundingBoxIndex" :get-face-label-key="getFaceLabelKey" :checked-people-by-box="checkedPeopleByBox" :planning-centre-people="planningCentrePeople" :get-household-members="getHouseholdMembers" @update="onUpdateAnnotations" @loading-change="imageLoading = $event" @face-box-click="onFaceBoxClick"></image-annotation>
-            <p v-else class="text-gray-500">Select a session to view images</p>
+          <div class="flex-1 w-full flex flex-col items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
+            <div class="flex-1 w-full flex items-center justify-center relative">
+              <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" :face-labels="faceLabels" :selected-bounding-box-index="selectedBoundingBoxIndex" :point-labels="pointLabels" :selected-point-label-id="selectedPointLabelId" :point-label-persons="pointLabelPersons" :checked-people-by-point="checkedPeopleByPoint" :get-face-label-key="getFaceLabelKey" :checked-people-by-box="checkedPeopleByBox" :planning-centre-people="planningCentrePeople" :get-household-members="getHouseholdMembers" @update="onUpdateAnnotations" @loading-change="imageLoading = $event" @face-box-click="onFaceBoxClick" @point-label-click="onPointLabelClick" @point-label-create="onPointLabelCreate"></image-annotation>
+              <p v-else class="text-gray-500">Select a session to view images</p>
+            </div>
+            <div v-if="selectedImage && !imageLoading" class="text-xs text-gray-500 mt-2 pb-2">
+              Hold Shift and Left Click on Image to add names without a box
+            </div>
             <div v-if="selectedImage && currentFolderFiles.length > 0 && !imageLoading" class="absolute top-4 right-4 text-white px-3 py-1.5 rounded text-sm font-medium" style="background-color: rgba(0, 0, 0, 0.5);">
               {{ currentFileIndex + 1 }}/{{ currentFolderFiles.length }}
             </div>
@@ -541,6 +588,10 @@
           peopleRetrievalCount: 0,
           planningCentrePeople: [], // Store the actual records
           selectedBoundingBoxIndex: null, // Index of the selected bounding box
+          pointLabels: {}, // Map of "imageName" to array of point labels: {imageName: [{id, x, y, naturalX, naturalY}]}
+          selectedPointLabelId: null, // ID of the selected point label (null if none selected)
+          pointLabelPersons: {}, // Map of point label ID to selected person record (similar to faceLabels)
+          checkedPeopleByPoint: {}, // Per-point-label checked people: { [pointLabelId]: { [personId]: true/false } }
           faceLabels: {}, // Map of "imageName_x_y_w_h" to selected person record (persists per session)
           searchQuery: '',
           searchResults: [],
@@ -961,6 +1012,7 @@
             }
             // Clear selected bounding box when switching files (but keep labels)
             this.selectedBoundingBoxIndex = null;
+            this.selectedPointLabelId = null;
             this.searchQuery = '';
             this.searchResults = [];
             this.selectedSearchIndex = -1;
@@ -971,6 +1023,7 @@
             this.selectedImage = null;
             this.imageLoading = false;
             this.selectedBoundingBoxIndex = null;
+            this.selectedPointLabelId = null;
             this.searchQuery = '';
             this.searchResults = [];
             this.selectedSearchIndex = -1;
@@ -1601,6 +1654,7 @@
             this.updateFolderContextFromSelected(node);
             // Clear selected bounding box when switching files (but keep labels)
             this.selectedBoundingBoxIndex = null;
+            this.selectedPointLabelId = null;
             this.searchQuery = '';
             this.searchResults = [];
             this.selectedSearchIndex = -1;
@@ -1625,6 +1679,7 @@
               this.currentFileIndex = newIndex;
               // Clear selected bounding box when switching images (but keep labels)
               this.selectedBoundingBoxIndex = null;
+              this.selectedPointLabelId = null;
               this.searchQuery = '';
               this.searchResults = [];
               this.selectedSearchIndex = -1;
@@ -1650,6 +1705,7 @@
               this.currentFileIndex = newIndex;
               // Clear selected bounding box when switching images (but keep labels)
               this.selectedBoundingBoxIndex = null;
+              this.selectedPointLabelId = null;
               this.searchQuery = '';
               this.searchResults = [];
               this.selectedSearchIndex = -1;
@@ -1659,6 +1715,101 @@
         },
         onUpdateAnnotations(newAnnotations) {
           this.annotations = newAnnotations;
+        },
+        onPointLabelCreate(pointData) {
+          if (!this.selectedFile) return;
+          
+          const imageName = this.selectedFile.name;
+          if (!this.pointLabels[imageName]) {
+            this.pointLabels[imageName] = [];
+          }
+          
+          // Generate unique ID for the point
+          const pointId = `point_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          
+          // Add point to the array
+          this.pointLabels[imageName].push({
+            id: pointId,
+            x: pointData.x,
+            y: pointData.y,
+            naturalX: pointData.naturalX,
+            naturalY: pointData.naturalY
+          });
+          
+          // Select the newly created point
+          this.selectedPointLabelId = pointId;
+          
+          // Clear bounding box selection when selecting a point
+          this.selectedBoundingBoxIndex = null;
+          
+          // Initialize checkboxes (no person selected yet for new point)
+          this.selectedPersonChecked = true;
+          this.householdCheckboxes = {};
+          
+          // Clear search state
+          this.searchQuery = '';
+          this.searchResults = [];
+          this.selectedSearchIndex = -1;
+          
+          // Ensure labelling is started (needed for search box to be visible)
+          if (!this.labellingStarted) {
+            this.labellingStarted = true;
+            this.showFaces = true;
+            // Fetch planning centre people if not already loaded
+            if (!this.planningCentrePeople || this.planningCentrePeople.length === 0) {
+              this.fetchPlanningCentrePeople();
+            }
+          }
+          
+          // Focus the search input - use both $nextTick and setTimeout to ensure DOM is ready
+          this.$nextTick(() => {
+            setTimeout(() => {
+              if (this.$refs.searchInput) {
+                this.$refs.searchInput.focus();
+              }
+            }, 100);
+          });
+        },
+        onPointLabelClick(pointId) {
+          // Toggle selection - if clicking the same point, deselect it
+          if (this.selectedPointLabelId === pointId) {
+            // Check if there's a person selected before deselecting
+            const currentLabel = this.getCurrentPointLabel();
+            if (!currentLabel) {
+              // No person selected, delete the point label
+              this.deletePointLabel(pointId);
+            }
+            this.selectedPointLabelId = null;
+            this.searchQuery = '';
+            this.searchResults = [];
+            this.selectedSearchIndex = -1;
+          } else {
+            this.selectedPointLabelId = pointId;
+            // Clear bounding box selection when selecting a point
+            this.selectedBoundingBoxIndex = null;
+            this.searchQuery = '';
+            this.searchResults = [];
+            this.selectedSearchIndex = -1;
+            
+            // Initialize checkboxes from global list if there's already a label
+            const currentLabel = this.getCurrentPointLabel();
+            if (currentLabel) {
+              // Check global list for selected person's checked state
+              this.selectedPersonChecked = this.isPersonCheckedForPoint(pointId, currentLabel.id);
+              this.initializeHouseholdCheckboxesForPoint(pointId, currentLabel);
+            } else {
+              // No label yet, default to checked
+              this.selectedPersonChecked = true;
+              this.householdCheckboxes = {};
+            }
+            
+            // Focus the search input (same as bounding box logic)
+            this.$nextTick(() => {
+              if (this.$refs.searchInput) {
+                this.$refs.searchInput.focus();
+              }
+            });
+          }
         },
         onFaceBoxClick(embeddingIndex) {
           // Toggle selection - if clicking the same box, deselect it
@@ -1672,6 +1823,8 @@
             this.householdCheckboxes = {};
           } else {
             this.selectedBoundingBoxIndex = embeddingIndex;
+            // Clear point label selection when selecting a bounding box
+            this.selectedPointLabelId = null;
             this.searchQuery = '';
             this.searchResults = [];
             this.selectedSearchIndex = -1;
@@ -1877,9 +2030,16 @@
           return snapshotIds.filter(personId => this.checkInOverlaySelection[personId]).length;
         },
         getSelectedCheckInPersonIds() {
-          // Aggregate all checked people from all bounding boxes
+          // Aggregate all checked people from all bounding boxes and point labels
           const allCheckedPeople = {};
           Object.values(this.checkedPeopleByBox || {}).forEach(checkedPeople => {
+            Object.keys(checkedPeople).forEach(personId => {
+              if (checkedPeople[personId]) {
+                allCheckedPeople[personId] = true;
+              }
+            });
+          });
+          Object.values(this.checkedPeopleByPoint || {}).forEach(checkedPeople => {
             Object.keys(checkedPeople).forEach(personId => {
               if (checkedPeople[personId]) {
                 allCheckedPeople[personId] = true;
@@ -2139,6 +2299,14 @@
             if (facialArea) {
               const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
               if (key) {
+                // Clear all previously checked people for this bounding box before setting new person
+                if (this.checkedPeopleByBox[key]) {
+                  // Uncheck all previously checked people
+                  Object.keys(this.checkedPeopleByBox[key]).forEach(personId => {
+                    this.checkedPeopleByBox[key][personId] = false;
+                  });
+                }
+                
                 this.faceLabels[key] = person;
                 this.currentSessionLabels[key] = person;
                 // Mark selected person as checked for this bounding box
@@ -2168,6 +2336,27 @@
                 await this.checkEmbeddingInDB(); // This will set checkingEmbeddingInDB to false when done
               }
             }
+            // Clear search
+            this.searchQuery = '';
+            this.searchResults = [];
+            this.selectedSearchIndex = -1;
+            // Remove focus from search input so 'n' key can be used
+            this.$nextTick(() => {
+              if (this.$refs.searchInput) {
+                this.$refs.searchInput.blur();
+              }
+            });
+          } else if (this.selectedPointLabelId !== null) {
+            // Handle point label selection
+            this.pointLabelPersons[this.selectedPointLabelId] = person;
+            // Mark selected person as checked for this point label
+            if (person.id) {
+              this.setPersonCheckedForPoint(this.selectedPointLabelId, person.id, true);
+            }
+            // Initialize checkbox states from per-point list
+            this.selectedPersonChecked = this.isPersonCheckedForPoint(this.selectedPointLabelId, person.id);
+            this.initializeHouseholdCheckboxesForPoint(this.selectedPointLabelId, person);
+            
             // Clear search
             this.searchQuery = '';
             this.searchResults = [];
@@ -2297,6 +2486,80 @@
           }
           // Fallback to local state if no label
           return this.selectedPersonChecked;
+        },
+        getSelectedPointPersonCheckedState() {
+          const currentLabel = this.getCurrentPointLabel();
+          if (currentLabel && currentLabel.id && this.selectedPointLabelId) {
+            // Check per-point list for selected person's checked state
+            return this.isPersonCheckedForPoint(this.selectedPointLabelId, currentLabel.id);
+          }
+          // Fallback to local state if no label
+          return this.selectedPersonChecked;
+        },
+        handleSelectedPointPersonCheckboxChange(event) {
+          const currentLabel = this.getCurrentPointLabel();
+          if (currentLabel && currentLabel.id && this.selectedPointLabelId) {
+            const checked = event.target.checked;
+            // Update local state
+            this.selectedPersonChecked = checked;
+            // Update per-point checked list
+            this.setPersonCheckedForPoint(this.selectedPointLabelId, currentLabel.id, checked);
+            
+            if (!checked) {
+              // Uncheck all household checkboxes for this point
+              const groups = this.getHouseholdGroups(currentLabel);
+              groups.forEach(group => {
+                group.members.forEach(member => {
+                  if (member.id) {
+                    this.setPersonCheckedForPoint(this.selectedPointLabelId, member.id, false);
+                  }
+                });
+              });
+              // Update local checkboxes
+              this.householdCheckboxes = {};
+              
+              // Clear the point label person
+              if (this.pointLabelPersons && this.pointLabelPersons[this.selectedPointLabelId]) {
+                delete this.pointLabelPersons[this.selectedPointLabelId];
+              }
+              
+              // Store the point ID before clearing selection
+              const pointIdToDelete = this.selectedPointLabelId;
+              
+              // Deselect the point label so it's no longer in selected state (not blinking)
+              this.selectedPointLabelId = null;
+              this.searchQuery = '';
+              this.searchResults = [];
+              this.selectedSearchIndex = -1;
+              
+              // Delete the point label since there's no person selected
+              this.deletePointLabel(pointIdToDelete);
+              
+              // Force update to refresh the UI
+              this.$forceUpdate();
+            } else {
+              // When re-checking, restore household checkbox states from per-point list
+              this.initializeHouseholdCheckboxesForPoint(this.selectedPointLabelId, currentLabel);
+            }
+          }
+        },
+        handlePointHouseholdCheckboxChange(memberId, event) {
+          if (memberId && this.selectedPointLabelId) {
+            const checked = event.target.checked;
+            // Update local checkbox state
+            this.householdCheckboxes[memberId] = checked;
+            // Update per-point checked list
+            this.setPersonCheckedForPoint(this.selectedPointLabelId, memberId, checked);
+          }
+        },
+        getPointHouseholdCheckboxState(memberId) {
+          if (!this.selectedPointLabelId || !memberId) return false;
+          // Check per-point list first, then local state
+          const checkedPeople = this.checkedPeopleByPoint[this.selectedPointLabelId] || {};
+          if (checkedPeople.hasOwnProperty(memberId)) {
+            return checkedPeople[memberId];
+          }
+          return this.householdCheckboxes[memberId] || false;
         },
         getEmbeddingsCountDisplay() {
           const currentLabel = this.getCurrentFaceLabel();
@@ -2539,6 +2802,32 @@
           const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
           return key ? this.faceLabels[key] || null : null;
         },
+        getCurrentPointLabel() {
+          if (this.selectedPointLabelId === null) return null;
+          return this.pointLabelPersons[this.selectedPointLabelId] || null;
+        },
+        isPersonCheckedForPoint(pointLabelId, personId) {
+          if (!pointLabelId || !personId) return false;
+          const checkedPeople = this.checkedPeopleByPoint[pointLabelId] || {};
+          return !!checkedPeople[personId];
+        },
+        setPersonCheckedForPoint(pointLabelId, personId, checked) {
+          if (!pointLabelId || !personId) return;
+          if (!this.checkedPeopleByPoint[pointLabelId]) {
+            this.checkedPeopleByPoint[pointLabelId] = {};
+          }
+          this.checkedPeopleByPoint[pointLabelId][personId] = checked;
+        },
+        initializeHouseholdCheckboxesForPoint(pointLabelId, person) {
+          if (!pointLabelId || !person || !this.getHouseholdMembers) return;
+          const householdMembers = this.getHouseholdMembers(person);
+          this.householdCheckboxes = {};
+          householdMembers.forEach(member => {
+            if (member && member.id) {
+              this.householdCheckboxes[member.id] = this.isPersonCheckedForPoint(pointLabelId, member.id);
+            }
+          });
+        },
         clearCurrentFaceLabel() {
           if (this.selectedBoundingBoxIndex === null || !this.selectedFile) return;
           const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
@@ -2554,6 +2843,39 @@
             this.selectedSearchIndex = -1;
           }
         },
+        clearCurrentPointLabel() {
+          if (this.selectedPointLabelId === null) return;
+          if (this.pointLabelPersons && this.pointLabelPersons[this.selectedPointLabelId]) {
+            delete this.pointLabelPersons[this.selectedPointLabelId];
+          }
+          // Clear selection
+          this.selectedPointLabelId = null;
+          this.searchQuery = '';
+          this.searchResults = [];
+          this.selectedSearchIndex = -1;
+        },
+        deletePointLabel(pointId) {
+          if (!pointId || !this.selectedFile) return;
+          
+          const imageName = this.selectedFile.name;
+          if (this.pointLabels[imageName]) {
+            // Remove the point from the array
+            this.pointLabels[imageName] = this.pointLabels[imageName].filter(point => point.id !== pointId);
+            
+            // If array is empty, remove the image entry
+            if (this.pointLabels[imageName].length === 0) {
+              delete this.pointLabels[imageName];
+            }
+          }
+          
+          // Clean up associated data
+          if (this.pointLabelPersons && this.pointLabelPersons[pointId]) {
+            delete this.pointLabelPersons[pointId];
+          }
+          if (this.checkedPeopleByPoint && this.checkedPeopleByPoint[pointId]) {
+            delete this.checkedPeopleByPoint[pointId];
+          }
+        },
         setupKeyboardNavigation() {
           document.addEventListener('keydown', this.handleKeydown);
         },
@@ -2561,16 +2883,36 @@
           // Only handle arrow keys when user is logged in and not loading
           if (!this.user || this.loading) return;
           
-          // Handle ESC key to deselect bounding box (works even in input fields)
-          if (event.key === 'Escape' && this.selectedBoundingBoxIndex !== null) {
-            event.preventDefault();
-            this.selectedBoundingBoxIndex = null;
-            this.searchQuery = '';
-            this.searchResults = [];
-            this.selectedSearchIndex = -1;
-            this.selectedPersonChecked = true;
-            this.householdCheckboxes = {};
-            return;
+          // Handle ESC key to deselect bounding box or point label (works even in input fields)
+          if (event.key === 'Escape') {
+            if (this.selectedBoundingBoxIndex !== null) {
+              event.preventDefault();
+              this.selectedBoundingBoxIndex = null;
+              this.searchQuery = '';
+              this.searchResults = [];
+              this.selectedSearchIndex = -1;
+              this.selectedPersonChecked = true;
+              this.householdCheckboxes = {};
+              return;
+            }
+            if (this.selectedPointLabelId !== null) {
+              event.preventDefault();
+              // Check if there's a person selected before deselecting
+              const currentLabel = this.getCurrentPointLabel();
+              const pointId = this.selectedPointLabelId;
+              this.selectedPointLabelId = null;
+              this.searchQuery = '';
+              this.searchResults = [];
+              this.selectedSearchIndex = -1;
+              this.selectedPersonChecked = true;
+              this.householdCheckboxes = {};
+              
+              // If no person selected, delete the point label
+              if (!currentLabel) {
+                this.deletePointLabel(pointId);
+              }
+              return;
+            }
           }
           
           // Handle 'Tab' key to go to next bounding box (works even in input fields when box is selected)
@@ -2892,13 +3234,13 @@
     });
 
     app.component('image-annotation', {
-      props: ['imageSrc', 'annotations', 'selectedFile', 'showFaces', 'faceLabels', 'selectedBoundingBoxIndex', 'getFaceLabelKey', 'checkedPeopleByBox', 'planningCentrePeople', 'getHouseholdMembers'],
-      template: `<div class="w-full h-full flex items-center justify-center">
+      props: ['imageSrc', 'annotations', 'selectedFile', 'showFaces', 'faceLabels', 'selectedBoundingBoxIndex', 'pointLabels', 'selectedPointLabelId', 'pointLabelPersons', 'checkedPeopleByPoint', 'getFaceLabelKey', 'checkedPeopleByBox', 'planningCentrePeople', 'getHouseholdMembers'],
+      template: `<div class="w-full h-full flex items-center justify-center relative">
         <div v-if="isLoading" class="loading-container">
           <div class="spinner"></div>
           <p>Loading image...</p>
         </div>
-        <v-stage v-else :config="stageConfig">
+        <v-stage v-else :config="stageConfig" @mousedown="handleStageClick" @mousemove="handleStageMouseMove" @mouseleave="handleStageMouseLeave">
           <v-layer>
             <v-image :config="imageConfig"></v-image>
             <v-rect v-for="(box, index) in facialAreaBoxes" :key="index" :config="box" @click="handleBoxClick(box.embeddingIndex)"></v-rect>
@@ -2907,8 +3249,17 @@
               <v-text v-for="(textItem, textIndex) in label.texts" :key="'text-' + textIndex" :config="textItem"></v-text>
             </v-group>
             <v-rect v-for="(box, index) in annotations" :key="'annotation-' + index" :config="box"></v-rect>
+            <v-rect v-for="(pointGroup, index) in pointLabelGroups" :key="'point-box-' + index" :config="pointGroup.boundingBox" @click="handlePointLabelClick(pointGroup.id)"></v-rect>
+            <v-text v-for="(pointGroup, index) in pointLabelGroups" :key="'point-marker-' + index" :config="pointGroup.marker"></v-text>
+            <v-group v-for="(label, index) in pointNameLabels" :key="'point-name-' + index" :config="{ x: label.groupX, y: label.groupY }">
+              <v-rect :config="label.bgRect"></v-rect>
+              <v-text v-for="(textItem, textIndex) in label.texts" :key="'point-text-' + textIndex" :config="textItem"></v-text>
+            </v-group>
           </v-layer>
         </v-stage>
+        <div v-if="showShiftTooltip" :style="{ position: 'absolute', left: tooltipX + 'px', top: tooltipY + 'px', pointerEvents: 'none', zIndex: 1000, backgroundColor: 'rgba(0, 0, 0, 0.8)', color: 'white', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', whiteSpace: 'nowrap' }">
+          Left Click to Add Name
+        </div>
       </div>`,
       data() {
         return {
@@ -2918,7 +3269,12 @@
           containerWidth: 0,
           containerHeight: 0,
           selectedBoxOpacity: 1,
-          blinkInterval: null
+          selectedPointOpacity: 1,
+          blinkInterval: null,
+          pointBlinkInterval: null,
+          showShiftTooltip: false,
+          tooltipX: 0,
+          tooltipY: 0
         };
       },
       computed: {
@@ -3174,6 +3530,201 @@
             console.error('Error creating name labels:', error);
             return [];
           }
+        },
+        pointLabelGroups() {
+          if (!this.selectedFile || !this.pointLabels || !this.imageConfig.image) {
+            return [];
+          }
+          
+          const imageName = this.selectedFile.name;
+          const points = this.pointLabels[imageName] || [];
+          
+          if (points.length === 0) {
+            return [];
+          }
+          
+          const img = this.imageConfig.image;
+          const naturalWidth = img.naturalWidth;
+          const naturalHeight = img.naturalHeight;
+          const displayWidth = this.imageConfig.width;
+          const displayHeight = this.imageConfig.height;
+          
+          const scaleX = displayWidth / naturalWidth;
+          const scaleY = displayHeight / naturalHeight;
+          
+          return points.map(point => {
+            const x = point.naturalX * scaleX;
+            const y = point.naturalY * scaleY;
+            const isSelected = this.selectedPointLabelId === point.id;
+            
+            // Check if this point has a person selected
+            const hasPerson = this.pointLabelPersons && this.pointLabelPersons[point.id] ? true : false;
+            
+            // Marker size and offset
+            const fontSize = isSelected ? 24 : 16;
+            const offsetX = isSelected ? 12 : 8;
+            const offsetY = isSelected ? 12 : 8;
+            
+            // Bounding box around the marker (larger clickable area)
+            const boxSize = isSelected ? 40 : 32; // Larger box when selected
+            const boxX = x - boxSize / 2;
+            const boxY = y - boxSize / 2;
+            // Color logic: 
+            // - Selected + no person: Blinking Yellow (#FFD700)
+            // - Selected + has person: Blinking Green (#10B981)
+            // - Not selected + has person: Solid Green (#10B981)
+            // - Not selected + no person: Should not exist (point should be deleted)
+            const boxColor = hasPerson ? '#10B981' : '#FFD700'; // Green if person selected, Yellow if not
+            // Opacity: Blinking when selected, solid when not selected
+            const boxOpacity = isSelected ? this.selectedPointOpacity : 1;
+            
+            return {
+              id: point.id,
+              boundingBox: {
+                x: boxX,
+                y: boxY,
+                width: boxSize,
+                height: boxSize,
+                fill: 'transparent',
+                stroke: boxColor,
+                strokeWidth: isSelected ? 3 : 2,
+                opacity: boxOpacity
+              },
+              marker: {
+                x: x,
+                y: y,
+                text: '◉', // &#9678; character
+                fontSize: fontSize,
+                fontFamily: 'Arial',
+                fill: boxColor,
+                align: 'center',
+                verticalAlign: 'middle',
+                offsetX: offsetX,
+                offsetY: offsetY,
+                opacity: boxOpacity,
+                listening: false // Marker itself doesn't need to be clickable, the box handles it
+              }
+            };
+          });
+        },
+        pointNameLabels() {
+          if (!this.selectedFile || !this.pointLabels || !this.pointLabelPersons || !this.imageConfig.image) {
+            return [];
+          }
+          
+          const imageName = this.selectedFile.name;
+          const points = this.pointLabels[imageName] || [];
+          
+          if (points.length === 0) {
+            return [];
+          }
+          
+          const img = this.imageConfig.image;
+          const naturalWidth = img.naturalWidth;
+          const naturalHeight = img.naturalHeight;
+          const displayWidth = this.imageConfig.width;
+          const displayHeight = this.imageConfig.height;
+          
+          const scaleX = displayWidth / naturalWidth;
+          const scaleY = displayHeight / naturalHeight;
+          
+          const allLabels = [];
+          
+          points.forEach(point => {
+            // Get the identified person for this point label
+            const identifiedPerson = this.pointLabelPersons[point.id] || null;
+            
+            if (!identifiedPerson) return; // No person selected, don't show label
+            
+            // Get checked people for this point label
+            const checkedPeople = this.checkedPeopleByPoint && this.checkedPeopleByPoint[point.id] ? this.checkedPeopleByPoint[point.id] : {};
+            const checkedPersonIds = Object.keys(checkedPeople).filter(personId => checkedPeople[personId]);
+            
+            // If there's an identified person, include them even if not explicitly checked
+            if (identifiedPerson && identifiedPerson.id && !checkedPersonIds.includes(identifiedPerson.id)) {
+              checkedPersonIds.push(identifiedPerson.id);
+            }
+            
+            if (checkedPersonIds.length === 0) return; // No checked people, don't show label
+            
+            // Get person objects for all checked people
+            const checkedPersons = checkedPersonIds
+              .map(personId => {
+                if (!this.planningCentrePeople) return null;
+                return this.planningCentrePeople.find(p => p.id === personId);
+              })
+              .filter(p => p !== null);
+            
+            if (checkedPersons.length === 0) return;
+            
+            // Separate selected person from household members
+            let selectedPerson = identifiedPerson;
+            let householdMembers = checkedPersons.filter(p => p.id !== identifiedPerson.id);
+            
+            if (!selectedPerson || !selectedPerson.name) return;
+            
+            // Calculate position
+            const x = point.naturalX * scaleX;
+            const y = point.naturalY * scaleY;
+            const boxSize = 32; // Default box size for positioning
+            
+            // Build text lines: selected person on first line, each household member on separate lines
+            const fontSize = 12;
+            const padding = 4;
+            const lineHeight = fontSize + 2; // Line height with spacing
+            
+            const texts = [];
+            texts.push({
+              x: padding,
+              y: padding,
+              text: selectedPerson.name,
+              fontSize: fontSize,
+              fontFamily: 'Arial',
+              fill: '#D3D3D3', // Light grey
+              align: 'left'
+            });
+            
+            // Add each household member on a separate line
+            householdMembers.forEach((member, index) => {
+              if (member && member.name) {
+                texts.push({
+                  x: padding,
+                  y: padding + (index + 1) * lineHeight,
+                  text: member.name,
+                  fontSize: fontSize,
+                  fontFamily: 'Arial',
+                  fill: '#D3D3D3', // Light grey
+                  align: 'left'
+                });
+              }
+            });
+            
+            // Calculate dimensions for background
+            const allNames = [selectedPerson.name, ...householdMembers.map(p => p.name).filter(name => name)];
+            const maxTextWidth = Math.max(...allNames.map(name => name.length * fontSize * 0.6));
+            const textHeight = texts.length * lineHeight + padding;
+            const textWidth = maxTextWidth;
+            
+            // Center the group horizontally below the point marker
+            const groupX = x - textWidth / 2 - padding; // Center horizontally
+            const groupY = y + boxSize / 2 + 2; // 2px below the marker
+            
+            allLabels.push({
+              groupX: groupX,
+              groupY: groupY,
+              bgRect: {
+                x: 0,
+                y: 0,
+                width: textWidth + padding * 2,
+                height: textHeight,
+                fill: 'rgba(0, 0, 0, 0.5)', // Semi-transparent black background
+                cornerRadius: 2
+              },
+              texts: texts
+            });
+          });
+          
+          return allLabels;
         }
       },
       watch: {
@@ -3196,6 +3747,29 @@
             } else {
               // Stop blinking
               this.selectedBoxOpacity = 1;
+            }
+          },
+          immediate: false
+        },
+        selectedPointLabelId: {
+          handler(newVal) {
+            // Start/stop blinking animation when point label selection changes
+            if (this.pointBlinkInterval) {
+              clearInterval(this.pointBlinkInterval);
+              this.pointBlinkInterval = null;
+            }
+            
+            if (newVal !== null) {
+              // Start blinking animation
+              this.selectedPointOpacity = 1;
+              this.pointBlinkInterval = setInterval(() => {
+                this.selectedPointOpacity = this.selectedPointOpacity === 1 ? 0.3 : 1;
+                // Force update to trigger recomputation of pointLabelMarkers
+                this.$forceUpdate();
+              }, 500); // Blink every 500ms
+            } else {
+              // Stop blinking
+              this.selectedPointOpacity = 1;
             }
           },
           immediate: false
@@ -3240,18 +3814,85 @@
           this.updateDimensions();
         });
         window.addEventListener('resize', this.updateDimensions);
+        // Listen for Shift key release to hide tooltip
+        window.addEventListener('keyup', this.handleKeyUp);
       },
       beforeUnmount() {
         window.removeEventListener('resize', this.updateDimensions);
-        // Clean up blinking interval
+        window.removeEventListener('keyup', this.handleKeyUp);
+        // Clean up blinking intervals
         if (this.blinkInterval) {
           clearInterval(this.blinkInterval);
           this.blinkInterval = null;
+        }
+        if (this.pointBlinkInterval) {
+          clearInterval(this.pointBlinkInterval);
+          this.pointBlinkInterval = null;
         }
       },
       methods: {
         handleBoxClick(embeddingIndex) {
           this.$emit('face-box-click', embeddingIndex);
+        },
+        handleStageMouseMove(event) {
+          // Check if Shift key is pressed
+          if (event.evt.shiftKey) {
+            const stage = event.target.getStage();
+            const pointerPos = stage.getPointerPosition();
+            const container = stage.container();
+            const containerRect = container.getBoundingClientRect();
+            
+            // Calculate tooltip position relative to the container
+            this.tooltipX = pointerPos.x + 10; // Offset to the right of cursor
+            this.tooltipY = pointerPos.y - 20; // Offset above cursor
+            this.showShiftTooltip = true;
+          } else {
+            this.showShiftTooltip = false;
+          }
+        },
+        handleStageMouseLeave(event) {
+          this.showShiftTooltip = false;
+        },
+        handleKeyUp(event) {
+          // Hide tooltip when Shift is released
+          if (event.key === 'Shift') {
+            this.showShiftTooltip = false;
+          }
+        },
+        handleStageClick(event) {
+          // Check if Shift key is pressed and left mouse button
+          if (event.evt.shiftKey && event.evt.button === 0) {
+            // Get the stage position
+            const stage = event.target.getStage();
+            const pointerPos = stage.getPointerPosition();
+            
+            // Get image dimensions and scale factors
+            if (!this.imageConfig.image) return;
+            
+            const img = this.imageConfig.image;
+            const naturalWidth = img.naturalWidth;
+            const naturalHeight = img.naturalHeight;
+            const displayWidth = this.imageConfig.width;
+            const displayHeight = this.imageConfig.height;
+            
+            const scaleX = naturalWidth / displayWidth;
+            const scaleY = naturalHeight / displayHeight;
+            
+            // Convert display coordinates to natural image coordinates
+            const naturalX = pointerPos.x * scaleX;
+            const naturalY = pointerPos.y * scaleY;
+            
+            // Emit event to parent to create point label
+            this.$emit('point-label-create', {
+              x: pointerPos.x,
+              y: pointerPos.y,
+              naturalX: naturalX,
+              naturalY: naturalY
+            });
+          }
+        },
+        handlePointLabelClick(pointId) {
+          this.$emit('point-label-click', pointId);
         },
         updateDimensions() {
           // Get the image pane container dimensions
