@@ -324,11 +324,20 @@
           
           <!-- Check-In Actions -->
           <div class="mt-auto border-t border-gray-200 pt-4">
+            <div v-if="selectedSessionName" class="mb-3">
+              <div class="text-xs text-gray-600 mb-2">
+                <div>Valid Check-In Period:</div>
+                <div class="font-medium">{{ getSessionValidTimeRangeString() }}</div>
+              </div>
+              <div v-if="!isSessionValid()" class="text-xs text-red-600 mb-2">
+                {{ getSessionInvalidMessage() }}
+              </div>
+            </div>
             <button
               @click="openCheckInOverlay"
-              :disabled="getSelectedCheckInPersonIds().length === 0"
+              :disabled="getSelectedCheckInPersonIds().length === 0 || !isSessionValid()"
               class="w-full text-sm font-semibold px-3 py-2 rounded-md border transition-colors"
-              :class="getSelectedCheckInPersonIds().length === 0 ? 'bg-gray-200 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'"
+              :class="(getSelectedCheckInPersonIds().length === 0 || !isSessionValid()) ? 'bg-gray-200 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'"
             >
               Check In
             </button>
@@ -384,7 +393,7 @@
             <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys<span v-if="selectedBoundingBoxIndex !== null">, Tab for next box, ESC to deselect</span></span>
           </div>
           <div class="flex-1 w-full flex items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
-            <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" :face-labels="faceLabels" :selected-bounding-box-index="selectedBoundingBoxIndex" :get-face-label-key="getFaceLabelKey" @update="onUpdateAnnotations" @loading-change="imageLoading = $event" @face-box-click="onFaceBoxClick"></image-annotation>
+            <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" :face-labels="faceLabels" :selected-bounding-box-index="selectedBoundingBoxIndex" :get-face-label-key="getFaceLabelKey" :checked-people-by-box="checkedPeopleByBox" :planning-centre-people="planningCentrePeople" :get-household-members="getHouseholdMembers" @update="onUpdateAnnotations" @loading-change="imageLoading = $event" @face-box-click="onFaceBoxClick"></image-annotation>
             <p v-else class="text-gray-500">Select a session to view images</p>
             <div v-if="selectedImage && currentFolderFiles.length > 0 && !imageLoading" class="absolute top-4 right-4 text-white px-3 py-1.5 rounded text-sm font-medium" style="background-color: rgba(0, 0, 0, 0.5);">
               {{ currentFileIndex + 1 }}/{{ currentFolderFiles.length }}
@@ -539,9 +548,9 @@
           faceGuesses: [], // Top 5 matches for the selected bounding box: [{person, similarity}]
           currentSessionLabels: {}, // Store labels for current session
           searchResultRefs: {}, // Refs to search result elements for scrolling
-          selectedPersonChecked: true, // Track if selected person checkbox is checked
-          householdCheckboxes: {}, // Track household member checkboxes state (local to current selection)
-          checkedPeople: {}, // Global list of checked people (person ID -> true/false) per session
+          selectedPersonChecked: true, // Track if selected person checkbox is checked (for current selection UI)
+          householdCheckboxes: {}, // Track household member checkboxes state (for current selection UI)
+          checkedPeopleByBox: {}, // Per-bounding-box checked people: { [faceLabelKey]: { [personId]: true/false } }
           embeddingsStored: {}, // Track if embeddings are stored for each bounding box (keyed by face label key)
           embeddingsCountCache: {}, // Cache for embeddings count per person ID
           currentEmbeddingData: null, // Store current embedding data for comparison
@@ -925,7 +934,7 @@
           // Clear labels, checked people, and embeddings stored when session changes
           this.faceLabels = {};
           this.currentSessionLabels = {};
-          this.checkedPeople = {};
+          this.checkedPeopleByBox = {};
           this.embeddingsStored = {};
           this.embeddingsCountCache = {};
           this.currentEmbeddingData = null;
@@ -1537,9 +1546,9 @@
                     this.faceLabels[key] = match.person;
                     this.currentSessionLabels[key] = match.person;
                     
-                    // Mark person as checked
+                    // Mark person as checked for this bounding box (same as manual selection)
                     if (match.person.id) {
-                      this.checkedPeople[match.person.id] = true;
+                      this.setPersonCheckedForBox(key, match.person.id, true);
                     }
                     
                     console.log(`Matched face ${embeddingIndex} to ${match.person.name} (similarity: ${match.similarity.toFixed(3)})`);
@@ -1868,7 +1877,119 @@
           return snapshotIds.filter(personId => this.checkInOverlaySelection[personId]).length;
         },
         getSelectedCheckInPersonIds() {
-          return Object.keys(this.checkedPeople || {}).filter(personId => this.checkedPeople[personId]);
+          // Aggregate all checked people from all bounding boxes
+          const allCheckedPeople = {};
+          Object.values(this.checkedPeopleByBox || {}).forEach(checkedPeople => {
+            Object.keys(checkedPeople).forEach(personId => {
+              if (checkedPeople[personId]) {
+                allCheckedPeople[personId] = true;
+              }
+            });
+          });
+          return Object.keys(allCheckedPeople);
+        },
+        // Get session validity time range in UTC
+        // sessionName is assumed to be a date in SGT format (e.g., "2025-11-30")
+        getSessionValidityRange(sessionName) {
+          if (!sessionName) {
+            return null;
+          }
+          
+          // Parse session date (e.g., "2025-11-30") - this is in SGT
+          const sessionDateMatch = sessionName.match(/^(\d{4})-(\d{2})-(\d{2})/);
+          if (!sessionDateMatch) {
+            return null;
+          }
+          
+          const [, year, month, day] = sessionDateMatch;
+          
+          // Session date is in SGT, so we need to:
+          // 1. Create a date for the day after session date at 10am SGT
+          // 2. Convert 10am SGT to UTC (SGT is UTC+8, so 10am SGT = 2am UTC)
+          const sessionYear = parseInt(year);
+          const sessionMonth = parseInt(month) - 1; // JavaScript months are 0-indexed
+          const sessionDay = parseInt(day);
+          
+          // Create date for next day at 10am SGT, then convert to UTC
+          // 10am SGT = 2am UTC on the same calendar date
+          const validStartUtc = new Date(Date.UTC(sessionYear, sessionMonth, sessionDay + 1, 2, 0, 0, 0));
+          
+          // Valid until: 7 days later at the same time (2am UTC = 10am SGT)
+          const validEndUtc = new Date(validStartUtc);
+          validEndUtc.setUTCDate(validEndUtc.getUTCDate() + 7);
+          
+          return {
+            startUtc: validStartUtc,
+            endUtc: validEndUtc
+          };
+        },
+        // Check if current time is within valid session period
+        isSessionValid() {
+          if (!this.selectedSessionName) {
+            return false;
+          }
+          
+          const range = this.getSessionValidityRange(this.selectedSessionName);
+          if (!range) {
+            return false;
+          }
+          
+          const nowUtc = new Date();
+          return nowUtc >= range.startUtc && nowUtc < range.endUtc;
+        },
+        // Format UTC date for display in user's local timezone (without timezone suffix)
+        formatLocalDateTimeNoTz(utcDate) {
+          if (!utcDate) return '';
+          // utcDate is a Date object in UTC, JavaScript will automatically convert to local timezone
+          const localDate = new Date(utcDate);
+          const year = localDate.getFullYear();
+          const month = String(localDate.getMonth() + 1).padStart(2, '0');
+          const day = String(localDate.getDate()).padStart(2, '0');
+          const hours = String(localDate.getHours()).padStart(2, '0');
+          const minutes = String(localDate.getMinutes()).padStart(2, '0');
+          return `${year}-${month}-${day} ${hours}:${minutes}`;
+        },
+        // Get timezone abbreviation for display
+        getLocalTimeZoneName() {
+          const now = new Date();
+          const timeZoneName = now.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop();
+          return timeZoneName;
+        },
+        // Get formatted valid time range string in user's local timezone
+        getSessionValidTimeRangeString() {
+          if (!this.selectedSessionName) {
+            return '';
+          }
+          
+          const range = this.getSessionValidityRange(this.selectedSessionName);
+          if (!range) {
+            return '';
+          }
+          
+          const startStr = this.formatLocalDateTimeNoTz(range.startUtc);
+          const endStr = this.formatLocalDateTimeNoTz(range.endUtc);
+          const timeZoneName = this.getLocalTimeZoneName();
+          return `${startStr} to ${endStr} (${timeZoneName})`;
+        },
+        // Get session invalid message based on whether it's past or not started
+        getSessionInvalidMessage() {
+          if (!this.selectedSessionName) {
+            return 'Session has not yet started.';
+          }
+          
+          const range = this.getSessionValidityRange(this.selectedSessionName);
+          if (!range) {
+            return 'Session has not yet started.';
+          }
+          
+          const nowUtc = new Date();
+          if (nowUtc < range.startUtc) {
+            return 'Session has not yet started.';
+          } else if (nowUtc >= range.endUtc) {
+            return 'Session has Past Valid Checkin Period.';
+          }
+          
+          return 'Session is Invalid as it is outside the valid Checkin Period.';
         },
         getOverlaySelectedPersonIds() {
           const snapshotIds = this.checkInOverlaySnapshot || [];
@@ -2020,11 +2141,11 @@
               if (key) {
                 this.faceLabels[key] = person;
                 this.currentSessionLabels[key] = person;
-                // Mark selected person as checked in global list
+                // Mark selected person as checked for this bounding box
                 if (person.id) {
-                  this.checkedPeople[person.id] = true;
+                  this.setPersonCheckedForBox(key, person.id, true);
                 }
-                // Initialize checkbox states from global list
+                // Initialize checkbox states from per-box list
                 this.selectedPersonChecked = this.isPersonChecked(person.id);
                 this.initializeHouseholdCheckboxes(person);
                 
@@ -2060,62 +2181,111 @@
           }
         },
         initializeHouseholdCheckboxes(person) {
-          // Initialize household checkboxes from global checked list
+          // Initialize household checkboxes from per-bounding-box checked list
           this.householdCheckboxes = {};
           const groups = this.getHouseholdGroups(person);
           groups.forEach(group => {
             group.members.forEach(member => {
               if (member.id) {
-                // Check global list for checked state
+                // Check per-bounding-box list for checked state
                 this.householdCheckboxes[member.id] = this.isPersonChecked(member.id);
               }
             });
           });
         },
+        // Get the face label key for the currently selected bounding box
+        getCurrentFaceLabelKey() {
+          if (this.selectedBoundingBoxIndex === null || !this.selectedFile) return null;
+          const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
+          if (!facialArea) return null;
+          return this.getFaceLabelKey(this.selectedFile.name, facialArea);
+        },
+        // Get checked people for a specific bounding box
+        getCheckedPeopleForBox(faceLabelKey) {
+          if (!faceLabelKey) return {};
+          return this.checkedPeopleByBox[faceLabelKey] || {};
+        },
+        // Set checked state for a person in a specific bounding box
+        setPersonCheckedForBox(faceLabelKey, personId, checked) {
+          if (!faceLabelKey || !personId) return;
+          if (!this.checkedPeopleByBox[faceLabelKey]) {
+            this.checkedPeopleByBox[faceLabelKey] = {};
+          }
+          if (checked) {
+            this.checkedPeopleByBox[faceLabelKey][personId] = true;
+          } else {
+            delete this.checkedPeopleByBox[faceLabelKey][personId];
+          }
+        },
+        // Check if a person is checked for the current bounding box
         isPersonChecked(personId) {
-          // Check if person is checked in global list
-          return personId ? (this.checkedPeople[personId] || false) : false;
+          const faceLabelKey = this.getCurrentFaceLabelKey();
+          if (!faceLabelKey || !personId) return false;
+          const checkedPeople = this.getCheckedPeopleForBox(faceLabelKey);
+          return checkedPeople[personId] || false;
         },
         handleSelectedPersonCheckboxChange(event) {
           const currentLabel = this.getCurrentFaceLabel();
-          if (currentLabel && currentLabel.id) {
+          const faceLabelKey = this.getCurrentFaceLabelKey();
+          if (currentLabel && currentLabel.id && faceLabelKey) {
             const checked = event.target.checked;
             // Update local state
             this.selectedPersonChecked = checked;
-            // Update global checked list
-            this.checkedPeople[currentLabel.id] = checked;
+            // Update per-bounding-box checked list
+            this.setPersonCheckedForBox(faceLabelKey, currentLabel.id, checked);
             
             if (!checked) {
-              // Uncheck all household checkboxes in global list
+              // Uncheck all household checkboxes for this box
               const groups = this.getHouseholdGroups(currentLabel);
               groups.forEach(group => {
                 group.members.forEach(member => {
                   if (member.id) {
-                    this.checkedPeople[member.id] = false;
+                    this.setPersonCheckedForBox(faceLabelKey, member.id, false);
                   }
                 });
               });
               // Update local checkboxes
               this.householdCheckboxes = {};
+              
+              // Clear the face label so the bounding box returns to unselected (yellow) state
+              if (this.faceLabels && this.faceLabels[faceLabelKey]) {
+                delete this.faceLabels[faceLabelKey];
+              }
+              if (this.currentSessionLabels && this.currentSessionLabels[faceLabelKey]) {
+                delete this.currentSessionLabels[faceLabelKey];
+              }
+              
+              // Deselect the bounding box so it's no longer in selected state (not blinking)
+              this.selectedBoundingBoxIndex = null;
+              this.searchQuery = '';
+              this.searchResults = [];
+              this.selectedSearchIndex = -1;
+              
+              // Force update to refresh the bounding box color
+              this.$forceUpdate();
             } else {
-              // When re-checking, restore household checkbox states from global list
+              // When re-checking, restore household checkbox states from per-box list
               this.initializeHouseholdCheckboxes(currentLabel);
             }
           }
         },
         handleHouseholdCheckboxChange(memberId, event) {
-          if (memberId) {
+          const faceLabelKey = this.getCurrentFaceLabelKey();
+          if (memberId && faceLabelKey) {
             const checked = event.target.checked;
             // Update local checkbox state
             this.householdCheckboxes[memberId] = checked;
-            // Update global checked list
-            this.checkedPeople[memberId] = checked;
+            // Update per-bounding-box checked list
+            this.setPersonCheckedForBox(faceLabelKey, memberId, checked);
           }
         },
         getHouseholdCheckboxState(memberId) {
-          // Check global list first, then local state
-          if (memberId && this.checkedPeople.hasOwnProperty(memberId)) {
-            return this.checkedPeople[memberId];
+          const faceLabelKey = this.getCurrentFaceLabelKey();
+          if (!faceLabelKey || !memberId) return false;
+          // Check per-bounding-box list first, then local state
+          const checkedPeople = this.getCheckedPeopleForBox(faceLabelKey);
+          if (checkedPeople.hasOwnProperty(memberId)) {
+            return checkedPeople[memberId];
           }
           return this.householdCheckboxes[memberId] || false;
         },
@@ -2722,7 +2892,7 @@
     });
 
     app.component('image-annotation', {
-      props: ['imageSrc', 'annotations', 'selectedFile', 'showFaces', 'faceLabels', 'selectedBoundingBoxIndex', 'getFaceLabelKey'],
+      props: ['imageSrc', 'annotations', 'selectedFile', 'showFaces', 'faceLabels', 'selectedBoundingBoxIndex', 'getFaceLabelKey', 'checkedPeopleByBox', 'planningCentrePeople', 'getHouseholdMembers'],
       template: `<div class="w-full h-full flex items-center justify-center">
         <div v-if="isLoading" class="loading-container">
           <div class="spinner"></div>
@@ -2734,7 +2904,7 @@
             <v-rect v-for="(box, index) in facialAreaBoxes" :key="index" :config="box" @click="handleBoxClick(box.embeddingIndex)"></v-rect>
             <v-group v-for="(label, index) in nameLabels" :key="'name-' + index" :config="{ x: label.groupX, y: label.groupY }">
               <v-rect :config="label.bgRect"></v-rect>
-              <v-text :config="label.text"></v-text>
+              <v-text v-for="(textItem, textIndex) in label.texts" :key="'text-' + textIndex" :config="textItem"></v-text>
             </v-group>
             <v-rect v-for="(box, index) in annotations" :key="'annotation-' + index" :config="box"></v-rect>
           </v-layer>
@@ -2783,7 +2953,23 @@
             
             const embeddingsWithFaces = model.embeddings
               .map((embedding, idx) => ({ embedding, index: idx }))
-              .filter(({ embedding }) => embedding.facial_area);
+              .filter(({ embedding }) => {
+                // Filter out embeddings without facial_area
+                if (!embedding.facial_area) {
+                  return false;
+                }
+                // Exclude bounding boxes that are approximately the same size as the entire image
+                // Use a threshold of 10 pixels
+                const area = embedding.facial_area;
+                const areaWidth = area.w || 0;
+                const areaHeight = area.h || 0;
+                const widthDiff = Math.abs(areaWidth - naturalWidth);
+                const heightDiff = Math.abs(areaHeight - naturalHeight);
+                if (widthDiff <= 1 && heightDiff <= 1) {
+                  return false; // Exclude this box - it covers the entire image (within 1px threshold)
+                }
+                return true;
+              });
             
             return embeddingsWithFaces.map(({ embedding, index }) => {
               const area = embedding.facial_area;
@@ -2841,7 +3027,7 @@
         },
         nameLabels() {
           // Return empty array if showFaces is false
-          if (!this.showFaces || !this.selectedFile || !this.selectedFile.model || !this.faceLabels) {
+          if (!this.showFaces || !this.selectedFile || !this.selectedFile.model) {
             return [];
           }
           
@@ -2869,60 +3055,121 @@
               .map((embedding, index) => ({ embedding, index }))
               .filter(({ embedding }) => embedding.facial_area);
             
-            return embeddingsWithFaces
-              .map(({ embedding, index }) => {
-                const area = embedding.facial_area;
-                const x = (area.x || 0) * scaleX;
-                const y = (area.y || 0) * scaleY;
-                const width = (area.w || 0) * scaleX;
-                const height = (area.h || 0) * scaleY;
-                
-                // Check if this face has a label
-                let label = null;
-                if (this.selectedFile && this.getFaceLabelKey) {
-                  const key = this.getFaceLabelKey(this.selectedFile.name, area);
-                  label = key ? (this.faceLabels[key] || null) : null;
-                }
-                
-                // Only return label if there's a name
-                if (!label || !label.name) {
-                  return null;
-                }
-                
-                // Position below the bounding box, centered
-                // Calculate approximate text width (rough estimate: 0.6 * fontSize * character count)
-                const fontSize = 12;
-                const padding = 4;
-                const textWidth = label.name.length * fontSize * 0.6; // Approximate width
-                const textHeight = fontSize + padding * 2;
-                
-                // Center the group horizontally below the box
-                const groupX = x + (width - textWidth) / 2 - padding; // Center horizontally
-                const groupY = y + height + 2; // 2px below the box
-                
-                return {
-                  groupX: groupX,
-                  groupY: groupY,
-                  bgRect: {
-                    x: 0,
-                    y: 0,
-                    width: textWidth + padding * 2,
-                    height: textHeight,
-                    fill: 'rgba(0, 0, 0, 0.5)', // Semi-transparent black background
-                    cornerRadius: 2
-                  },
-                  text: {
+            const allLabels = [];
+            
+            embeddingsWithFaces.forEach(({ embedding, index }) => {
+              const area = embedding.facial_area;
+              const x = (area.x || 0) * scaleX;
+              const y = (area.y || 0) * scaleY;
+              const width = (area.w || 0) * scaleX;
+              const height = (area.h || 0) * scaleY;
+              
+              // Get the face label key for this bounding box
+              let key = null;
+              if (this.selectedFile && this.getFaceLabelKey) {
+                key = this.getFaceLabelKey(this.selectedFile.name, area);
+              }
+              
+              if (!key) return;
+              
+              // Get the identified person from faceLabels (for vector-matched faces)
+              const identifiedPerson = this.faceLabels && this.faceLabels[key] ? this.faceLabels[key] : null;
+              
+              // Get checked people for this bounding box
+              const checkedPeople = this.checkedPeopleByBox && this.checkedPeopleByBox[key] ? this.checkedPeopleByBox[key] : {};
+              const checkedPersonIds = Object.keys(checkedPeople).filter(personId => checkedPeople[personId]);
+              
+              // If there's an identified person, include them even if not explicitly checked
+              if (identifiedPerson && identifiedPerson.id && !checkedPersonIds.includes(identifiedPerson.id)) {
+                checkedPersonIds.push(identifiedPerson.id);
+              }
+              
+              if (checkedPersonIds.length === 0) return; // No checked people, don't show label
+              
+              // Get person objects for all checked people
+              const checkedPersons = checkedPersonIds
+                .map(personId => {
+                  if (!this.planningCentrePeople) return null;
+                  return this.planningCentrePeople.find(p => p.id === personId);
+                })
+                .filter(p => p !== null);
+              
+              if (checkedPersons.length === 0) return;
+              
+              // Separate selected person from household members
+              let selectedPerson = null;
+              let householdMembers = [];
+              
+              if (identifiedPerson) {
+                // Use identified person as selected person
+                selectedPerson = identifiedPerson;
+                // Get household members from checked people (excluding selected person)
+                householdMembers = checkedPersons.filter(p => p.id !== identifiedPerson.id);
+              } else {
+                // No identified person, use first checked person as selected
+                selectedPerson = checkedPersons[0];
+                householdMembers = checkedPersons.slice(1);
+              }
+              
+              if (!selectedPerson || !selectedPerson.name) return;
+              
+              // Build text lines: selected person on first line, each household member on separate lines
+              const fontSize = 12;
+              const padding = 4;
+              const lineHeight = fontSize + 2; // Line height with spacing
+              
+              const texts = [];
+              texts.push({
+                x: padding,
+                y: padding,
+                text: selectedPerson.name,
+                fontSize: fontSize,
+                fontFamily: 'Arial',
+                fill: '#D3D3D3', // Light grey
+                align: 'left'
+              });
+              
+              // Add each household member on a separate line
+              householdMembers.forEach((member, index) => {
+                if (member && member.name) {
+                  texts.push({
                     x: padding,
-                    y: padding,
-                    text: label.name,
+                    y: padding + (index + 1) * lineHeight,
+                    text: member.name,
                     fontSize: fontSize,
                     fontFamily: 'Arial',
                     fill: '#D3D3D3', // Light grey
                     align: 'left'
-                  }
-                };
-              })
-              .filter(label => label !== null); // Remove null entries
+                  });
+                }
+              });
+              
+              // Calculate dimensions for background
+              const allNames = [selectedPerson.name, ...householdMembers.map(p => p.name).filter(name => name)];
+              const maxTextWidth = Math.max(...allNames.map(name => name.length * fontSize * 0.6));
+              const textHeight = texts.length * lineHeight + padding;
+              const textWidth = maxTextWidth;
+              
+              // Center the group horizontally below the box
+              const groupX = x + (width - textWidth) / 2 - padding; // Center horizontally
+              const groupY = y + height + 2; // 2px below the box
+              
+              allLabels.push({
+                groupX: groupX,
+                groupY: groupY,
+                bgRect: {
+                  x: 0,
+                  y: 0,
+                  width: textWidth + padding * 2,
+                  height: textHeight,
+                  fill: 'rgba(0, 0, 0, 0.5)', // Semi-transparent black background
+                  cornerRadius: 2
+                },
+                texts: texts
+              });
+            });
+            
+            return allLabels;
           } catch (error) {
             console.error('Error creating name labels:', error);
             return [];
