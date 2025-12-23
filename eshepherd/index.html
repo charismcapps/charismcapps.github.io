@@ -185,7 +185,17 @@
               <span>Retrieving people records...</span>
             </div>
             <div v-else-if="peopleRetrievalStatus === 'completed'" class="text-xs text-gray-600">
-              Retrieved {{ peopleRetrievalCount }} records
+              <div class="flex items-center justify-between">
+                <span>Retrieved {{ peopleRetrievalCount }} records</span>
+                <button
+                  @click="fetchPlanningCentrePeople"
+                  :disabled="peopleRetrievalStatus === 'retrieving'"
+                  class="ml-2 text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  title="Reload people records from Planning Centre"
+                >
+                  Reload Records
+                </button>
+              </div>
               <div v-if="selectedFile && getFaceScanningStatus()" class="mt-1">
                 <div v-if="getFaceScanningStatus() === 'scanning'" class="flex items-center gap-2 text-gray-600">
                   <div class="spinner-small"></div>
@@ -1595,16 +1605,22 @@
                   const key = this.getFaceLabelKey(file.name, facialArea);
                   
                   if (key) {
-                    // Set the label
-                    this.faceLabels[key] = match.person;
-                    this.currentSessionLabels[key] = match.person;
-                    
-                    // Mark person as checked for this bounding box (same as manual selection)
-                    if (match.person.id) {
-                      this.setPersonCheckedForBox(key, match.person.id, true);
+                    // Only set the label if it hasn't been manually set by the user
+                    // This prevents overwriting manual selections when applying cached matches
+                    if (!this.faceLabels[key]) {
+                      // Set the label
+                      this.faceLabels[key] = match.person;
+                      this.currentSessionLabels[key] = match.person;
+                      
+                      // Mark person as checked for this bounding box (same as manual selection)
+                      if (match.person.id) {
+                        this.setPersonCheckedForBox(key, match.person.id, true);
+                      }
+                      
+                      console.log(`Matched face ${embeddingIndex} to ${match.person.name} (similarity: ${match.similarity.toFixed(3)})`);
+                    } else {
+                      console.log(`Skipping match for face ${embeddingIndex}: manual selection already exists`);
                     }
-                    
-                    console.log(`Matched face ${embeddingIndex} to ${match.person.name} (similarity: ${match.similarity.toFixed(3)})`);
                   }
                 }
               }
@@ -2184,17 +2200,27 @@
               email: this.user.email,
               uid: this.user.uid
             };
-            const response = await fetch('https://check-in-to-planning-center-g7egpip7ea-as.a.run.app', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${idToken}`
-              },
-              body: JSON.stringify(payload)
-            });
+            
+            let response;
+            try {
+              response = await fetch('https://check-in-to-planning-center-g7egpip7ea-as.a.run.app', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${idToken}`
+                },
+                body: JSON.stringify(payload)
+              });
+            } catch (fetchError) {
+              // Handle network errors (connection lost, timeout, etc.)
+              if (fetchError.name === 'TypeError' && (fetchError.message.includes('Failed to fetch') || fetchError.message.includes('Load failed') || fetchError.message.includes('network'))) {
+                throw new Error('Network connection failed. Please check your internet connection and try again.');
+              }
+              throw fetchError;
+            }
             
             if (!response.ok) {
-              const errorText = await response.text();
+              const errorText = await response.text().catch(() => '');
               throw new Error(errorText || `Check-in failed with status ${response.status}`);
             }
             
@@ -2229,7 +2255,15 @@
             }
           } catch (error) {
             console.error('Error performing check-in:', error);
-            this.checkInError = error.message || 'Failed to perform check-in.';
+            
+            // Provide more specific error messages for network failures
+            if (error.name === 'TypeError' && (error.message.includes('Failed to fetch') || error.message.includes('Load failed') || error.message.includes('network'))) {
+              this.checkInError = 'Network connection failed. Please check your internet connection and try again.';
+            } else if (error.message) {
+              this.checkInError = error.message;
+            } else {
+              this.checkInError = 'Failed to perform check-in. Please check your internet connection and try again.';
+            }
           } finally {
             this.checkInSubmitting = false;
           }
@@ -3255,6 +3289,10 @@
               <v-rect :config="label.bgRect"></v-rect>
               <v-text v-for="(textItem, textIndex) in label.texts" :key="'point-text-' + textIndex" :config="textItem"></v-text>
             </v-group>
+            <v-group v-if="panTiltZoomConfig" :config="{ x: panTiltZoomConfig.groupX, y: panTiltZoomConfig.groupY }">
+              <v-rect :config="panTiltZoomConfig.bgRect"></v-rect>
+              <v-text :config="panTiltZoomConfig.text"></v-text>
+            </v-group>
           </v-layer>
         </v-stage>
         <div v-if="showShiftTooltip" :style="{ position: 'absolute', left: tooltipX + 'px', top: tooltipY + 'px', pointerEvents: 'none', zIndex: 1000, backgroundColor: 'rgba(0, 0, 0, 0.8)', color: 'white', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', whiteSpace: 'nowrap' }">
@@ -3725,6 +3763,85 @@
           });
           
           return allLabels;
+        },
+        panTiltZoom() {
+          // Extract pan, tilt, zoom from filename
+          if (!this.selectedFile || !this.selectedFile.name) {
+            return null;
+          }
+          
+          const filename = this.selectedFile.name.toLowerCase();
+          
+          // Check if it's a JPG file
+          if (!filename.endsWith('.jpg') && !filename.endsWith('.jpeg')) {
+            return null;
+          }
+          
+          // Pattern to match: panXX.X_tiltXX.X_zoomXX.X (taking first occurrence)
+          // Handles negative numbers like pan-34.4
+          const panMatch = filename.match(/_pan(-?\d+\.?\d*)/);
+          const tiltMatch = filename.match(/_tilt(-?\d+\.?\d*)/);
+          const zoomMatch = filename.match(/_zoom(-?\d+\.?\d*)/);
+          
+          if (panMatch && tiltMatch && zoomMatch) {
+            return {
+              pan: parseFloat(panMatch[1]),
+              tilt: parseFloat(tiltMatch[1]),
+              zoom: parseFloat(zoomMatch[1])
+            };
+          }
+          
+          return null;
+        },
+        panTiltZoomConfig() {
+          if (!this.panTiltZoom || !this.imageConfig.image) {
+            return null;
+          }
+          
+          const { pan, tilt, zoom } = this.panTiltZoom;
+          const text = `Pan: ${pan.toFixed(1)}° Tilt: ${tilt.toFixed(1)}° Zoom: ${zoom.toFixed(1)}`;
+          
+          // Position in bottom left corner with some padding
+          const padding = 10;
+          const fontSize = 14;
+          const fontFamily = 'Arial';
+          
+          // Create a temporary canvas to measure text width
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          ctx.font = `${fontSize}px ${fontFamily}`;
+          const textWidth = ctx.measureText(text).width;
+          const textHeight = fontSize;
+          
+          const textPadding = 6;
+          const bgWidth = textWidth + textPadding * 2;
+          const bgHeight = textHeight + textPadding * 2;
+          
+          const groupX = padding;
+          const groupY = this.stageConfig.height - bgHeight - padding;
+          
+          return {
+            groupX: groupX,
+            groupY: groupY,
+            bgRect: {
+              x: 0,
+              y: 0,
+              width: bgWidth,
+              height: bgHeight,
+              fill: 'rgba(0, 0, 0, 0.5)',
+              cornerRadius: 4
+            },
+            text: {
+              x: textPadding,
+              y: textPadding,
+              text: text,
+              fontSize: fontSize,
+              fontFamily: fontFamily,
+              fill: 'white',
+              align: 'left',
+              verticalAlign: 'top'
+            }
+          };
         }
       },
       watch: {
