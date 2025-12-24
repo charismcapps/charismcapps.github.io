@@ -1,7 +1,8 @@
 // Load all utility modules and expose them as Utils object
 import * as embeddingUtils from './utils/embeddingUtils.js';
 import * as sessionUtils from './utils/sessionUtils.js';
-import * as householdUtils from './utils/householdUtils.js';
+import * as faceAnnotationUtils from './utils/faceAnnotationUtils.js';
+import * as faceRecognitionUtils from './utils/faceRecognition.js';
 import { setupResizer } from './utils/resizer.js';
 import { firebaseConfig, auth, database } from './config/firebase.js';
 import { authService } from './services/authService.js';
@@ -36,11 +37,25 @@ window.Utils = {
   getSessionValidTimeRangeString: sessionUtils.getSessionValidTimeRangeString,
   getSessionInvalidMessage: sessionUtils.getSessionInvalidMessage,
   
-  // Household utilities
-  getHouseholdMembers: householdUtils.getHouseholdMembers,
-  getHouseholdGroups: householdUtils.getHouseholdGroups,
-  getHouseholdMembersDisplay: householdUtils.getHouseholdMembersDisplay,
-  getPersonById: householdUtils.getPersonById,
+  // Face annotation utilities
+  getFaceLabelKey: faceAnnotationUtils.getFaceLabelKey,
+  getFacialAreaForIndex: faceAnnotationUtils.getFacialAreaForIndex,
+  getCurrentFaceLabelKey: faceAnnotationUtils.getCurrentFaceLabelKey,
+  getCheckedPeopleForBox: faceAnnotationUtils.getCheckedPeopleForBox,
+  isPersonChecked: faceAnnotationUtils.isPersonChecked,
+  isPersonCheckedForPoint: faceAnnotationUtils.isPersonCheckedForPoint,
+  getCurrentFaceLabel: faceAnnotationUtils.getCurrentFaceLabel,
+  getCurrentPointLabel: faceAnnotationUtils.getCurrentPointLabel,
+  getEmbeddingsStoredState: faceAnnotationUtils.getEmbeddingsStoredState,
+  getSelectedCheckInPersonIds: faceAnnotationUtils.getSelectedCheckInPersonIds,
+  getHouseholdCheckboxState: faceAnnotationUtils.getHouseholdCheckboxState,
+  getPointHouseholdCheckboxState: faceAnnotationUtils.getPointHouseholdCheckboxState,
+  getSelectedPersonCheckedState: faceAnnotationUtils.getSelectedPersonCheckedState,
+  getSelectedPointPersonCheckedState: faceAnnotationUtils.getSelectedPointPersonCheckedState,
+  
+  // Face recognition utilities
+  matchFacesInImage: faceRecognitionUtils.matchFacesInImage,
+  applyFaceMatches: faceRecognitionUtils.applyFaceMatches,
   
   // Resizer utility
   setupResizer: setupResizer

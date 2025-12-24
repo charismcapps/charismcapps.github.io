@@ -69,34 +69,27 @@
           :check-in-submitting="checkInSubmitting"
           :check-in-error="checkInError"
           :check-in-success-message="checkInSuccessMessage"
-          :get-faces-button-text="getFacesButtonText"
-          :get-faces-button-class="getFacesButtonClass"
-          :get-face-scanning-status="getFaceScanningStatus"
-          :get-face-scan-count="getFaceScanCount"
-          :get-current-face-label="getCurrentFaceLabel"
-          :get-current-point-label="getCurrentPointLabel"
-          :get-selected-person-checked-state="getSelectedPersonCheckedState"
-          :get-selected-point-person-checked-state="getSelectedPointPersonCheckedState"
-          :get-household-checkbox-state="getHouseholdCheckboxState"
-          :get-point-household-checkbox-state="getPointHouseholdCheckboxState"
-          :get-household-groups="getHouseholdGroups"
-          :get-household-members="getHouseholdMembers"
-          :get-household-members-display="getHouseholdMembersDisplay"
-          :get-match-display-text="getMatchDisplayText"
-          :get-embeddings-stored-state="getEmbeddingsStoredState"
-          :get-selected-check-in-person-ids="getSelectedCheckInPersonIds"
-          :get-session-valid-time-range-string="getSessionValidTimeRangeString"
-          :is-session-valid="isSessionValid"
-          :get-session-invalid-message="getSessionInvalidMessage"
-          :get-check-in-table-data="getCheckInTableData"
-          :get-overlay-selected-count="getOverlaySelectedCount"
-          :are-all-check-in-selected="areAllCheckInSelected"
+          :show-faces="showFaces"
+          :face-labels="faceLabels"
+          :face-scanning-status="faceScanningStatus"
+          :face-scan-count="faceScanCount"
+          :checked-people-by-box="checkedPeopleByBox"
+          :checked-people-by-point="checkedPeopleByPoint"
+          :point-label-persons="pointLabelPersons"
+          :embeddings-stored="embeddingsStored"
+          :embeddings-count-cache="embeddingsCountCache"
+          :face-match-cache="faceMatchCache"
+          :embedding-index="embeddingIndex"
           @session-change="onSessionChange"
           @faces-button-click="handleFacesButtonClick"
           @fetch-planning-centre-people="fetchPlanningCentrePeople"
           @reload-embeddings="reloadEmbeddingsIndex"
-          @search-input="handleSearchInput"
-          @search-keydown="handleSearchKeydown"
+          @search-input="searchQuery = $event"
+          @search-results-change="searchResults = $event"
+          @search-index-change="selectedSearchIndex = $event"
+          @face-guesses-clear="faceGuesses = []"
+          @face-guesses-update="faceGuesses = $event"
+          @load-face-guesses="loadAllStoredEmbeddings()"
           @select-person="selectPerson"
           @selected-person-checkbox-change="handleSelectedPersonCheckboxChange"
           @household-checkbox-change="handleHouseholdCheckboxChange"
@@ -112,6 +105,7 @@
 
       <!-- Right Pane: Image Annotation Panel -->
       <image-annotation-panel
+        ref="imageAnnotationPanel"
         :user="user"
         :loading="loading"
         :error="error"
@@ -130,17 +124,17 @@
         :selected-point-label-id="selectedPointLabelId"
         :point-label-persons="pointLabelPersons"
         :checked-people-by-point="checkedPeopleByPoint"
-        :checked-people-by-box="checkedPeopleByBox"
-        :planning-centre-people="planningCentrePeople"
-        :get-face-label-key="getFaceLabelKey"
-        :get-household-members="getHouseholdMembers"
-        :get-image-timestamp="getImageTimestamp"
-        @sign-in="signIn"
-        @prev-image="bannerVisible = true; goPrevImage()"
-        @next-image="bannerVisible = true; goNextImage()"
-        @touch-start="handleTouchStart"
-        @touch-end="handleTouchEnd"
-        @update-annotations="onUpdateAnnotations"
+          :checked-people-by-box="checkedPeopleByBox"
+          :planning-centre-people="planningCentrePeople"
+          :ensure-url-valid="ensureUrlValid"
+          :fetch-model-data="fetchModelData"
+          @sign-in="signIn"
+        @file-change="selectedFile = $event"
+        @image-change="selectedImage = $event"
+        @file-index-change="currentFileIndex = $event"
+        @clear-selection="handleClearSelection"
+        @banner-visibility-change="handleBannerVisibilityChange"
+        @update-annotations="annotations = $event"
         @loading-change="imageLoading = $event"
         @face-box-click="onFaceBoxClick"
         @point-label-click="onPointLabelClick"
@@ -157,15 +151,18 @@
           :submitting="checkInSubmitting"
           :error="checkInError"
           :success-message="checkInSuccessMessage"
+          :user="user"
           @close="closeCheckInOverlay"
-          @submit="performCheckIn"
           @toggle-select-all="toggleCheckInSelectAll"
           @checkbox-change="handleCheckInTableCheckboxChange"
+          @submitting-change="checkInSubmitting = $event"
+          @error-change="checkInError = $event"
+          @success-message-change="checkInSuccessMessage = $event"
         ></check-in-overlay>
       </image-annotation-panel>
-    </div>
-  </div>
-
+          </div>
+        </div>
+        
   <script>
     // Wait for Utils and Components to be loaded from modules
     (async function() {
@@ -188,8 +185,8 @@
       const Utils = window.Utils;
       const Services = window.Services;
 
-      const VueKonva = window['vue-konva'].default;
-      const app = Vue.createApp({
+    const VueKonva = window['vue-konva'].default;
+    const app = Vue.createApp({
           data() {
         return {
           directoryTree: [],
@@ -248,18 +245,6 @@
         };
       },
       methods: {
-        getFacesButtonText() {
-          if (!this.labellingStarted) {
-            return 'Start Labelling';
-          }
-          return this.showFaces ? 'Hide Faces' : 'Show Faces';
-        },
-        getFacesButtonClass() {
-          if (!this.labellingStarted) {
-            return 'bg-blue-500 text-white border-blue-600 hover:bg-blue-600';
-          }
-          return this.showFaces ? 'bg-green-500 text-white border-green-600' : 'bg-gray-200 text-gray-700 border-gray-300 hover:bg-gray-300';
-        },
         async handleFacesButtonClick() {
           if (!this.labellingStarted) {
             // Start labelling: show faces and fetch planning centre people
@@ -421,12 +406,7 @@
           }
         },
         getFaceLabelKey(imageName, facialArea) {
-          if (!imageName || !facialArea) return null;
-          const x = Math.round(facialArea.x || 0);
-          const y = Math.round(facialArea.y || 0);
-          const w = Math.round(facialArea.w || 0);
-          const h = Math.round(facialArea.h || 0);
-          return `${imageName}_${x}_${y}_${w}_${h}`;
+          return Utils.getFaceLabelKey(imageName, facialArea);
         },
         async onSelectSession(session) {
           this.selectedSession = session;
@@ -481,39 +461,6 @@
         },
         getAllFilesFromNode(node) {
           return Services.file.getAllFilesFromNode(node);
-        },
-        getImageTimestamp(file) {
-          if (!file || !file.name) return null;
-          
-          try {
-            // Extract the first part before the underscore (hex timestamp)
-            const parts = file.name.split('_');
-            if (parts.length === 0 || !parts[0]) return null;
-            
-            const hexTimestamp = parts[0];
-            
-            // Convert hex to decimal (unix timestamp)
-            const unixTimestamp = parseInt(hexTimestamp, 16);
-            
-            if (isNaN(unixTimestamp)) return null;
-            
-            // Convert unix timestamp to Date object
-            const date = new Date(unixTimestamp * 1000); // Convert seconds to milliseconds
-            
-            // Format the date/time
-            return date.toLocaleString('en-US', {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-              hour12: true
-            });
-          } catch (error) {
-            console.error('Error parsing timestamp from filename:', error);
-            return null;
-          }
         },
         async fetchModelData(file) {
           if (!file || !file.model_url) return null;
@@ -597,207 +544,9 @@
             this.embeddingIndex = null;
           }
         },
-        // Load top 5 matches for face guesses
-        async loadFaceGuesses() {
-          if (this.selectedBoundingBoxIndex === null || !this.selectedFile || !this.selectedFile.model) {
-            this.faceGuesses = [];
-            return;
-          }
-          
-          try {
-            // Load embedding data for the selected bounding box
-            const model = typeof this.selectedFile.model === 'string' 
-              ? JSON.parse(this.selectedFile.model) 
-              : this.selectedFile.model;
-            
-            if (!model.embeddings || !Array.isArray(model.embeddings)) {
-              this.faceGuesses = [];
-              return;
-            }
-            
-            const embedding = model.embeddings[this.selectedBoundingBoxIndex];
-            if (!embedding || !embedding.embedding || !embedding.facial_area) {
-              this.faceGuesses = [];
-              return;
-            }
-            
-            // Decode embedding if it's base64 encoded
-            let embeddingArray = embedding.embedding;
-            if (typeof embeddingArray === 'string') {
-              embeddingArray = this.decodeEmbeddingFromBase64(embeddingArray);
-              if (!embeddingArray) {
-                this.faceGuesses = [];
-                return;
-              }
-            }
-            
-            // Ensure embeddingArray is a flat array of numbers
-            if (!Array.isArray(embeddingArray)) {
-              this.faceGuesses = [];
-              return;
-            }
-            
-            embeddingArray = embeddingArray.flat(Infinity);
-            
-            // Validate all elements are numbers
-            if (!embeddingArray.every(v => typeof v === 'number' && !isNaN(v) && isFinite(v))) {
-              this.faceGuesses = [];
-              return;
-            }
-            
-            // Load all stored embeddings if not already loaded
-            await this.loadAllStoredEmbeddings();
-            
-            if (!this.embeddingIndex) {
-              this.faceGuesses = [];
-              return;
-            }
-            
-            // Search for top 5 matches
-            const results = await this.embeddingIndex.search(embeddingArray, { topK: 5 });
-            
-            if (!results || results.length === 0) {
-              this.faceGuesses = [];
-              return;
-            }
-            
-            // Process results and match with planningCentrePeople
-            // Use a Map to deduplicate by personId, keeping only the highest similarity
-            const guessesMap = new Map();
-            
-            for (const result of results) {
-              let similarity = result.similarity || result.score || 0;
-              
-              // If distance is provided instead, convert to similarity
-              if (result.distance !== undefined && similarity === 0) {
-                similarity = 1 - result.distance;
-              }
-              
-              // Extract personId
-              let personId = null;
-              if (result.personId) {
-                personId = result.personId;
-              } else if (result.id) {
-                personId = result.id.split('_')[0];
-              } else if (result.object && result.object.personId) {
-                personId = result.object.personId;
-              } else if (result.item && result.item.personId) {
-                personId = result.item.personId;
-              }
-              
-              if (personId) {
-                // Find person in planningCentrePeople
-                const person = this.planningCentrePeople.find(p => p.id === personId);
-                if (person) {
-                  // Check if we already have this person, keep the one with higher similarity
-                  const existing = guessesMap.get(personId);
-                  if (!existing || similarity > existing.similarity) {
-                    guessesMap.set(personId, {
-                      person: person,
-                      similarity: similarity
-                    });
-                  }
-                }
-              }
-            }
-            
-            // Convert Map to array and sort by similarity (descending)
-            const guesses = Array.from(guessesMap.values())
-              .sort((a, b) => b.similarity - a.similarity)
-              .slice(0, 5); // Take top 5 after deduplication
-            
-            this.faceGuesses = guesses;
-          } catch (error) {
-            console.error('Error loading face guesses:', error);
-            this.faceGuesses = [];
-          }
-        },
-        // Find best match for an embedding using client-vector-search
-        async findBestMatch(queryEmbedding) {
-          if (!queryEmbedding) {
-            console.error('findBestMatch: queryEmbedding is null or undefined');
-            return null;
-          }
-          
-          if (!Array.isArray(queryEmbedding)) {
-            console.error('findBestMatch: queryEmbedding is not an array. Type:', typeof queryEmbedding, 'Value:', queryEmbedding);
-            return null;
-          }
-          
-          if (queryEmbedding.length === 0) {
-            console.error('findBestMatch: queryEmbedding is an empty array');
-            return null;
-          }
-          
-          if (!this.embeddingIndex) {
-            console.error('findBestMatch: embeddingIndex is null. Has it been initialized?');
-            return null;
-          }
-          
-          try {
-            // Search for top match
-            const results = await this.embeddingIndex.search(queryEmbedding, { topK: 1 });
-            
-            if (results && results.length > 0) {
-              const bestResult = results[0];
-              
-              // Debug: log the result structure
-              console.log('Search result:', bestResult);
-              
-              // Check if similarity is above threshold
-              // client-vector-search returns similarity scores (typically 0-1 for cosine similarity)
-              // The result might have similarity, score, or distance (inverted)
-              let similarity = bestResult.similarity || bestResult.score || 0;
-              
-              // If distance is provided instead, convert to similarity (assuming cosine distance)
-              if (bestResult.distance !== undefined && similarity === 0) {
-                similarity = 1 - bestResult.distance; // Convert distance to similarity
-              }
-              
-              // Extract personId from the result
-              // The library should return the original object we passed in
-              let personId = null;
-              
-              // Try different ways to get personId
-              if (bestResult.personId) {
-                personId = bestResult.personId;
-              } else if (bestResult.id) {
-                // Extract from id format: "personId_index"
-                personId = bestResult.id.split('_')[0];
-              } else if (bestResult.object && bestResult.object.personId) {
-                personId = bestResult.object.personId;
-              } else if (bestResult.item && bestResult.item.personId) {
-                personId = bestResult.item.personId;
-              }
-              
-              console.log('Extracted personId:', personId, 'similarity:', similarity);
-              
-              if (similarity >= this.SIMILARITY_THRESHOLD && personId) {
-                return {
-                  personId: personId,
-                  similarity: similarity,
-                  embedding: bestResult.embedding || bestResult.object?.embedding || bestResult.item?.embedding
-                };
-              } else {
-                console.log(`Match below threshold: similarity=${similarity}, threshold=${this.SIMILARITY_THRESHOLD}, personId=${personId}`);
-              }
-            }
-            
-            return null;
-          } catch (error) {
-            console.error('Error finding best match:', error);
-            return null;
-          }
-        },
         // Match all faces in an image
         async matchFacesInImage(file) {
           if (!file || !file.model || !file.name) {
-            return;
-          }
-          
-          // Only scan faces when planningCentrePeople data is fully loaded
-          if (this.peopleRetrievalStatus !== 'completed' || !this.planningCentrePeople || this.planningCentrePeople.length === 0) {
-            console.log('Skipping face scan: planningCentrePeople not loaded yet');
             return;
           }
           
@@ -826,101 +575,28 @@
             return;
           }
           
-          try {
-            // Set scanning status
-            this.faceScanningStatus[imageKey] = 'scanning';
+          // Use utility function
+          const matches = await Utils.matchFacesInImage(file, {
+            peopleRetrievalStatus: this.peopleRetrievalStatus,
+            planningCentrePeople: this.planningCentrePeople,
+            faceMatchCache: this.faceMatchCache,
+            faceScanningStatus: this.faceScanningStatus,
+            faceScanCount: this.faceScanCount,
+            embeddingIndex: this.embeddingIndex,
+            similarityThreshold: this.SIMILARITY_THRESHOLD,
+            loadAllStoredEmbeddings: () => this.loadAllStoredEmbeddings(),
+            updateState: (updates) => {
+              Object.keys(updates).forEach(key => {
+                this[key] = updates[key];
+              });
             this.$forceUpdate();
-            
-            const model = typeof file.model === 'string' 
-              ? JSON.parse(file.model) 
-              : file.model;
-            
-            if (!model.embeddings || !Array.isArray(model.embeddings)) {
-              this.faceScanningStatus[imageKey] = 'scanned';
-              this.$forceUpdate();
-              return;
             }
-            
-            // Load all stored embeddings if not already loaded
-            await this.loadAllStoredEmbeddings();
-            
-            // Get person records for matching
-            const matches = {};
-            let faceCount = 0;
-            
-            // Match each face embedding
-            for (let i = 0; i < model.embeddings.length; i++) {
-              const embedding = model.embeddings[i];
-              
-              if (embedding && embedding.embedding && embedding.facial_area) {
-                faceCount++;
-                
-                // Decode embedding if it's base64 encoded
-                let embeddingArray = embedding.embedding;
-                if (typeof embeddingArray === 'string') {
-                  // Try to decode from base64
-                  embeddingArray = this.decodeEmbeddingFromBase64(embeddingArray);
-                  if (!embeddingArray) {
-                    console.warn(`Face ${i}: Could not decode embedding from base64`);
-                    continue;
-                  }
-                }
-                
-                const bestMatch = await this.findBestMatch(embeddingArray);
-                
-                if (bestMatch) {
-                  console.log('Found match:', bestMatch);
-                  // Find person record from planningCentrePeople
-                  const person = this.planningCentrePeople.find(p => p.id === bestMatch.personId);
-                  
-                  if (person) {
-                    matches[i] = {
-                      personId: bestMatch.personId,
-                      similarity: bestMatch.similarity,
-                      person: person
-                    };
-                    console.log(`Matched face ${i} to person ${person.name} (ID: ${person.id}, similarity: ${bestMatch.similarity})`);
-                  } else {
-                    console.warn(`Person with ID ${bestMatch.personId} not found in planningCentrePeople`);
-                  }
-                } else {
-                  console.log(`No match found for face ${i} (below threshold or no match)`);
-                }
-              }
-            }
-            
-            // Store face count
-            this.faceScanCount[imageKey] = faceCount;
-            
-            // Cache the matches
-            this.faceMatchCache[imageKey] = matches;
+          });
             
             // Apply the matches
+          if (matches && Object.keys(matches).length > 0) {
             this.applyFaceMatches(file, matches);
-            
-            // Set status to scanned
-            this.faceScanningStatus[imageKey] = 'scanned';
-            this.$forceUpdate();
-            
-          } catch (error) {
-            console.error('Error matching faces in image:', error);
-            this.faceScanningStatus[imageKey] = 'scanned'; // Set to scanned even on error
-            this.$forceUpdate();
           }
-        },
-        // Get face scanning status for current image
-        getFaceScanningStatus() {
-          if (!this.selectedFile || !this.selectedFile.name) {
-            return null;
-          }
-          return this.faceScanningStatus[this.selectedFile.name] || null;
-        },
-        // Get face scan count for current image
-        getFaceScanCount() {
-          if (!this.selectedFile || !this.selectedFile.name) {
-            return 0;
-          }
-          return this.faceScanCount[this.selectedFile.name] || 0;
         },
         // Apply face matches to labels
         applyFaceMatches(file, matches) {
@@ -928,54 +604,17 @@
             return;
           }
           
-          try {
-            const model = typeof file.model === 'string' 
-              ? JSON.parse(file.model) 
-              : file.model;
-            
-            if (!model.embeddings || !Array.isArray(model.embeddings)) {
-              return;
-            }
-            
-            // Apply each match
-            for (const embeddingIndexStr in matches) {
-              const embeddingIndex = parseInt(embeddingIndexStr);
-              const match = matches[embeddingIndex];
-              
-              if (match && match.person && model.embeddings[embeddingIndex]) {
-                const embedding = model.embeddings[embeddingIndex];
-                const facialArea = embedding.facial_area;
-                
-                if (facialArea) {
-                  const key = this.getFaceLabelKey(file.name, facialArea);
-                  
-                  if (key) {
-                    // Only set the label if it hasn't been manually set by the user
-                    // This prevents overwriting manual selections when applying cached matches
-                    if (!this.faceLabels[key]) {
-                      // Set the label
-                      this.faceLabels[key] = match.person;
-                      this.currentSessionLabels[key] = match.person;
-                      
-                      // Mark person as checked for this bounding box (same as manual selection)
-                      if (match.person.id) {
-                        this.setPersonCheckedForBox(key, match.person.id, true);
-                      }
-                      
-                      console.log(`Matched face ${embeddingIndex} to ${match.person.name} (similarity: ${match.similarity.toFixed(3)})`);
-                    } else {
-                      console.log(`Skipping match for face ${embeddingIndex}: manual selection already exists`);
-                    }
-                  }
-                }
-              }
-            }
-            
-            // Force update to refresh UI
+          Utils.applyFaceMatches(file, matches, {
+            faceLabels: this.faceLabels,
+            currentSessionLabels: this.currentSessionLabels,
+            setPersonCheckedForBox: (key, personId, checked) => this.setPersonCheckedForBox(key, personId, checked),
+            updateState: (updates) => {
+              Object.keys(updates).forEach(key => {
+                this[key] = updates[key];
+              });
             this.$forceUpdate();
-          } catch (error) {
-            console.error('Error applying face matches:', error);
           }
+          });
         },
         formatModel(model) {
           if (!model) return '';
@@ -1000,6 +639,16 @@
             this.onSelectSession(latestSession);
           }
         },
+        handleClearSelection() {
+          this.selectedBoundingBoxIndex = null;
+          this.selectedPointLabelId = null;
+          this.searchQuery = '';
+          this.searchResults = [];
+          this.selectedSearchIndex = -1;
+        },
+        handleBannerVisibilityChange(value) {
+          this.bannerVisible = value === null ? !this.bannerVisible : value;
+        },
         async onSelectNode(node) {
           if (node.type === 'file') {
             this.selectedFile = node;
@@ -1021,61 +670,6 @@
             this.selectedSearchIndex = -1;
             // Don't clear faceLabels - they persist per session
           }
-        },
-        async goPrevImage() {
-          if (this.currentFileIndex > 0) {
-            const newIndex = this.currentFileIndex - 1;
-            const nextFile = this.currentFolderFiles[newIndex];
-            if (nextFile) {
-              this.selectedFile = nextFile;
-              const validUrl = await this.ensureUrlValid(nextFile);
-              this.selectedImage = validUrl;
-              if (!validUrl) {
-                console.error('Failed to get valid URL for file:', nextFile.name);
-              }
-              // Fetch model data if model_url exists
-              if (nextFile.model_url) {
-                this.fetchModelData(nextFile);
-              }
-              this.currentFileIndex = newIndex;
-              // Clear selected bounding box when switching images (but keep labels)
-              this.selectedBoundingBoxIndex = null;
-              this.selectedPointLabelId = null;
-              this.searchQuery = '';
-              this.searchResults = [];
-              this.selectedSearchIndex = -1;
-              // Don't clear faceLabels - they persist per session
-            }
-          }
-        },
-        async goNextImage() {
-          if (this.currentFileIndex >= 0 && this.currentFileIndex < this.currentFolderFiles.length - 1) {
-            const newIndex = this.currentFileIndex + 1;
-            const nextFile = this.currentFolderFiles[newIndex];
-            if (nextFile) {
-              this.selectedFile = nextFile;
-              const validUrl = await this.ensureUrlValid(nextFile);
-              this.selectedImage = validUrl;
-              if (!validUrl) {
-                console.error('Failed to get valid URL for file:', nextFile.name);
-              }
-              // Fetch model data if model_url exists
-              if (nextFile.model_url) {
-                this.fetchModelData(nextFile);
-              }
-              this.currentFileIndex = newIndex;
-              // Clear selected bounding box when switching images (but keep labels)
-              this.selectedBoundingBoxIndex = null;
-              this.selectedPointLabelId = null;
-              this.searchQuery = '';
-              this.searchResults = [];
-              this.selectedSearchIndex = -1;
-              // Don't clear faceLabels - they persist per session
-            }
-          }
-        },
-        onUpdateAnnotations(newAnnotations) {
-          this.annotations = newAnnotations;
         },
         onPointLabelCreate(pointData) {
           if (!this.selectedFile) return;
@@ -1220,8 +814,7 @@
               this.householdCheckboxes = {};
               this.currentEmbeddingData = null;
               
-              // Load top 5 matches for guesses
-              this.loadFaceGuesses();
+              // Face guesses will be loaded by ControlSidePanel component
             }
             // Focus the search input
             this.$nextTick(() => {
@@ -1231,45 +824,17 @@
             });
           }
         },
-        handleSearchInput(value) {
-          this.searchQuery = value;
-          this.performSearch();
-        },
-        performSearch() {
-          // Clear face guesses when user starts typing
-          this.faceGuesses = [];
-          
-          if (!this.searchQuery || this.searchQuery.trim() === '') {
-            this.searchResults = [];
-            this.selectedSearchIndex = -1;
-            this.searchResultRefs = {};
-            return;
-          }
-          
-          const query = this.searchQuery.toLowerCase().trim();
-          const results = this.planningCentrePeople
-            .filter(person => person.name && person.name.toLowerCase().includes(query))
-            .slice(0, 15); // Up to 15 results (show 5 initially, scroll for more)
-          
-          this.searchResults = results;
-          // Reset selected index when search results change
-          this.selectedSearchIndex = results.length > 0 ? 0 : -1;
-          // Clear refs - they will be recreated by Vue
-          this.$nextTick(() => {
-            this.scrollToSelectedResult();
-          });
-        },
         getHouseholdMembers(person) {
-          return Utils.getHouseholdMembers(person, this.planningCentrePeople);
+          return Services.planningCenter.getHouseholdMembers(person, this.planningCentrePeople);
         },
         getHouseholdGroups(person) {
-          return Utils.getHouseholdGroups(person, this.planningCentrePeople);
+          return Services.planningCenter.getHouseholdGroups(person, this.planningCentrePeople);
         },
         getHouseholdMembersDisplay(person) {
-          return Utils.getHouseholdMembersDisplay(person, this.planningCentrePeople);
+          return Services.planningCenter.getHouseholdMembersDisplay(person, this.planningCentrePeople);
         },
         getPersonById(personId) {
-          return Utils.getPersonById(personId, this.planningCentrePeople);
+          return Services.planningCenter.getPersonById(personId, this.planningCentrePeople);
         },
         getCheckInTableData() {
           const entries = [];
@@ -1336,171 +901,12 @@
           return snapshotIds.filter(personId => this.checkInOverlaySelection[personId]).length;
         },
         getSelectedCheckInPersonIds() {
-          // Aggregate all checked people from all bounding boxes and point labels
-          const allCheckedPeople = {};
-          Object.values(this.checkedPeopleByBox || {}).forEach(checkedPeople => {
-            Object.keys(checkedPeople).forEach(personId => {
-              if (checkedPeople[personId]) {
-                allCheckedPeople[personId] = true;
-              }
-            });
-          });
-          Object.values(this.checkedPeopleByPoint || {}).forEach(checkedPeople => {
-            Object.keys(checkedPeople).forEach(personId => {
-              if (checkedPeople[personId]) {
-                allCheckedPeople[personId] = true;
-              }
-            });
-          });
-          return Object.keys(allCheckedPeople);
+          return Utils.getSelectedCheckInPersonIds(this.checkedPeopleByBox, this.checkedPeopleByPoint);
         },
         // Get session validity time range in UTC
         // sessionName is assumed to be a date in SGT format (e.g., "2025-11-30")
         getSessionValidityRange(sessionName) {
           return Utils.getSessionValidityRange(sessionName);
-        },
-        // Check if current time is within valid session period
-        isSessionValid() {
-          return Utils.isSessionValid(this.selectedSessionName);
-        },
-        // Format UTC date for display in user's local timezone (without timezone suffix)
-        formatLocalDateTimeNoTz(utcDate) {
-          return Utils.formatLocalDateTimeNoTz(utcDate);
-        },
-        // Get timezone abbreviation for display
-        getLocalTimeZoneName() {
-          return Utils.getLocalTimeZoneName();
-        },
-        // Get formatted valid time range string in user's local timezone
-        getSessionValidTimeRangeString() {
-          return Utils.getSessionValidTimeRangeString(this.selectedSessionName);
-        },
-        // Get session invalid message based on whether it's past or not started
-        getSessionInvalidMessage() {
-          return Utils.getSessionInvalidMessage(this.selectedSessionName);
-        },
-        getOverlaySelectedPersonIds() {
-          const snapshotIds = this.checkInOverlaySnapshot || [];
-          return snapshotIds.filter(personId => this.checkInOverlaySelection[personId]);
-        },
-        async performCheckIn() {
-          if (this.checkInSubmitting) {
-            return;
-          }
-          
-          const personIds = this.showCheckInOverlay ? this.getOverlaySelectedPersonIds() : this.getSelectedCheckInPersonIds();
-          if (!personIds.length) {
-            this.checkInError = 'Select at least one person to check in.';
-            this.checkInSuccessMessage = '';
-            return;
-          }
-          
-          if (!this.user) {
-            this.checkInError = 'You must be signed in to perform check-in.';
-            this.checkInSuccessMessage = '';
-            return;
-          }
-          
-          try {
-            this.checkInSubmitting = true;
-            this.checkInError = null;
-            this.checkInSuccessMessage = '';
-            
-            const result = await Services.planningCenter.performCheckIn(this.user, personIds);
-            
-            if (result.success) {
-              this.checkInSuccessMessage = result.data?.message || 'Check-in request submitted successfully.';
-              
-              if (result.data && typeof result.data === 'object') {
-                const {
-                  success,
-                  total_persons_received,
-                  already_checked_in,
-                  people_to_update
-                } = result.data;
-                
-                const lines = [];
-                if (typeof success !== 'undefined') {
-                  lines.push(`Success: ${success ? 'Yes' : 'No'}`);
-                }
-                if (typeof total_persons_received !== 'undefined') {
-                  lines.push(`Total persons received: ${total_persons_received}`);
-                }
-                if (typeof already_checked_in !== 'undefined') {
-                  lines.push(`Already checked in: ${already_checked_in}`);
-                }
-                if (typeof people_to_update !== 'undefined') {
-                  lines.push(`People to update: ${people_to_update}`);
-                }
-                
-                if (lines.length > 0) {
-                  alert(lines.join('\n'));
-                }
-              }
-            } else {
-              this.checkInError = result.error || 'Failed to perform check-in.';
-            }
-          } catch (error) {
-            console.error('Error performing check-in:', error);
-            this.checkInError = error.message || 'Failed to perform check-in. Please check your internet connection and try again.';
-          } finally {
-            this.checkInSubmitting = false;
-          }
-        },
-        handleSearchKeydown(event) {
-          if (this.searchResults.length === 0) {
-            return; // Don't handle keys if there are no results
-          }
-          
-          switch(event.key) {
-            case 'ArrowDown':
-              event.preventDefault();
-              this.selectedSearchIndex = (this.selectedSearchIndex + 1) % this.searchResults.length;
-              this.scrollToSelectedResult();
-              break;
-            case 'ArrowUp':
-              event.preventDefault();
-              if (this.selectedSearchIndex <= 0) {
-                this.selectedSearchIndex = this.searchResults.length - 1;
-              } else {
-                this.selectedSearchIndex = this.selectedSearchIndex - 1;
-              }
-              this.scrollToSelectedResult();
-              break;
-            case 'Enter':
-              event.preventDefault();
-              if (this.selectedSearchIndex >= 0 && this.selectedSearchIndex < this.searchResults.length) {
-                this.selectPerson(this.searchResults[this.selectedSearchIndex]);
-              }
-              break;
-            case 'Escape':
-              event.preventDefault();
-              this.selectedSearchIndex = -1;
-              break;
-          }
-        },
-        scrollToSelectedResult() {
-          // Use $nextTick to ensure DOM is updated before scrolling
-          this.$nextTick(() => {
-            if (this.selectedSearchIndex >= 0 && this.searchResultRefs[this.selectedSearchIndex]) {
-              const selectedElement = this.searchResultRefs[this.selectedSearchIndex];
-              const container = this.$refs.searchResultsContainer;
-              
-              if (container && selectedElement) {
-                const containerRect = container.getBoundingClientRect();
-                const elementRect = selectedElement.getBoundingClientRect();
-                
-                // Check if element is outside visible area
-                if (elementRect.top < containerRect.top) {
-                  // Element is above visible area, scroll up
-                  selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                } else if (elementRect.bottom > containerRect.bottom) {
-                  // Element is below visible area, scroll down
-                  selectedElement.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                }
-              }
-            }
-          });
         },
         async selectPerson(person) {
           // Clear face guesses when a person is selected
@@ -1597,15 +1003,11 @@
         },
         // Get the face label key for the currently selected bounding box
         getCurrentFaceLabelKey() {
-          if (this.selectedBoundingBoxIndex === null || !this.selectedFile) return null;
-          const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-          if (!facialArea) return null;
-          return this.getFaceLabelKey(this.selectedFile.name, facialArea);
+          return Utils.getCurrentFaceLabelKey(this.selectedFile, this.selectedBoundingBoxIndex);
         },
         // Get checked people for a specific bounding box
         getCheckedPeopleForBox(faceLabelKey) {
-          if (!faceLabelKey) return {};
-          return this.checkedPeopleByBox[faceLabelKey] || {};
+          return Utils.getCheckedPeopleForBox(this.checkedPeopleByBox, faceLabelKey);
         },
         // Set checked state for a person in a specific bounding box
         setPersonCheckedForBox(faceLabelKey, personId, checked) {
@@ -1622,9 +1024,7 @@
         // Check if a person is checked for the current bounding box
         isPersonChecked(personId) {
           const faceLabelKey = this.getCurrentFaceLabelKey();
-          if (!faceLabelKey || !personId) return false;
-          const checkedPeople = this.getCheckedPeopleForBox(faceLabelKey);
-          return checkedPeople[personId] || false;
+          return Utils.isPersonChecked(this.checkedPeopleByBox, faceLabelKey, personId);
         },
         handleSelectedPersonCheckboxChange(event) {
           const currentLabel = this.getCurrentFaceLabel();
@@ -1683,31 +1083,13 @@
         },
         getHouseholdCheckboxState(memberId) {
           const faceLabelKey = this.getCurrentFaceLabelKey();
-          if (!faceLabelKey || !memberId) return false;
-          // Check per-bounding-box list first, then local state
-          const checkedPeople = this.getCheckedPeopleForBox(faceLabelKey);
-          if (checkedPeople.hasOwnProperty(memberId)) {
-            return checkedPeople[memberId];
-          }
-          return this.householdCheckboxes[memberId] || false;
+          return Utils.getHouseholdCheckboxState(this.checkedPeopleByBox, faceLabelKey, memberId, this.householdCheckboxes);
         },
         getSelectedPersonCheckedState() {
-          const currentLabel = this.getCurrentFaceLabel();
-          if (currentLabel && currentLabel.id) {
-            // Check global list for selected person's checked state
-            return this.isPersonChecked(currentLabel.id);
-          }
-          // Fallback to local state if no label
-          return this.selectedPersonChecked;
+          return Utils.getSelectedPersonCheckedState(this.selectedFile, this.selectedBoundingBoxIndex, this.faceLabels, this.checkedPeopleByBox, this.selectedPersonChecked);
         },
         getSelectedPointPersonCheckedState() {
-          const currentLabel = this.getCurrentPointLabel();
-          if (currentLabel && currentLabel.id && this.selectedPointLabelId) {
-            // Check per-point list for selected person's checked state
-            return this.isPersonCheckedForPoint(this.selectedPointLabelId, currentLabel.id);
-          }
-          // Fallback to local state if no label
-          return this.selectedPersonChecked;
+          return Utils.getSelectedPointPersonCheckedState(this.selectedPointLabelId, this.pointLabelPersons, this.checkedPeopleByPoint, this.selectedPersonChecked);
         },
         handleSelectedPointPersonCheckboxChange(event) {
           const currentLabel = this.getCurrentPointLabel();
@@ -1779,39 +1161,6 @@
           if (!currentLabel || !currentLabel.id) return 0;
           return this.embeddingsCountCache[currentLabel.id] || 0;
         },
-        getMatchDisplayText() {
-          const currentLabel = this.getCurrentFaceLabel();
-          if (!currentLabel || !currentLabel.id) {
-            return '0 Embeddings in DB';
-          }
-          
-          const embeddingsCount = this.embeddingsCountCache[currentLabel.id] || 0;
-          
-          // Check if there's a match for the current bounding box
-          if (this.selectedBoundingBoxIndex === null || !this.selectedFile || !this.selectedFile.name) {
-            return `${embeddingsCount} Embeddings in DB`;
-          }
-          
-          const imageKey = this.selectedFile.name;
-          const matchCache = this.faceMatchCache[imageKey];
-          
-          if (!matchCache || !matchCache[this.selectedBoundingBoxIndex]) {
-            // No match found for this face
-            return `No Match. ${embeddingsCount} Embeddings in DB`;
-          }
-          
-          const match = matchCache[this.selectedBoundingBoxIndex];
-          
-          // Check if the selected person matches the top match
-          if (match.personId === currentLabel.id) {
-            // Selected person is the top match - show match percentage
-            const matchPercentage = (match.similarity * 100).toFixed(1);
-            return `${matchPercentage}% Match. ${embeddingsCount} Embeddings in DB`;
-          } else {
-            // Selected person is not the top match
-            return `No Match. ${embeddingsCount} Embeddings in DB`;
-          }
-        },
         async getEmbeddingsCount() {
           const currentLabel = this.getCurrentFaceLabel();
           if (!currentLabel || !currentLabel.id) return 0;
@@ -1834,11 +1183,7 @@
           }
         },
         getEmbeddingsStoredState() {
-          if (this.selectedBoundingBoxIndex === null || !this.selectedFile) return false;
-          const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-          if (!facialArea) return false;
-          const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
-          return key ? (this.embeddingsStored[key] || false) : false;
+          return Utils.getEmbeddingsStoredState(this.selectedFile, this.selectedBoundingBoxIndex, this.embeddingsStored);
         },
         loadEmbeddingData() {
           // Load the embedding data for the current bounding box
@@ -1930,20 +1275,20 @@
             const result = await Services.embedding.storeEmbedding(currentLabel.id, this.currentEmbeddingData);
             
             if (result.success) {
-              // Update stored state
-              const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-              if (facialArea) {
-                const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
-                if (key) {
-                  this.embeddingsStored[key] = true;
-                }
+            // Update stored state
+            const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
+            if (facialArea) {
+              const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
+              if (key) {
+                this.embeddingsStored[key] = true;
               }
-              
-              // Update count cache
+            }
+            
+            // Update count cache
               this.embeddingsCountCache[currentLabel.id] = result.count;
-              
-              // Force update to refresh UI
-              this.$forceUpdate();
+            
+            // Force update to refresh UI
+            this.$forceUpdate();
             } else {
               alert('Failed to store embedding: ' + (result.error || 'Unknown error'));
             }
@@ -1954,37 +1299,16 @@
         },
         getFacialAreaForIndex(embeddingIndex) {
           if (!this.selectedFile || !this.selectedFile.model) return null;
-          try {
-            const model = typeof this.selectedFile.model === 'string' 
-              ? JSON.parse(this.selectedFile.model) 
-              : this.selectedFile.model;
-            
-            if (!model.embeddings || !Array.isArray(model.embeddings)) {
-              return null;
-            }
-            
-            const embedding = model.embeddings[embeddingIndex];
-            return embedding && embedding.facial_area ? embedding.facial_area : null;
-          } catch (error) {
-            console.error('Error getting facial area:', error);
-            return null;
-          }
+          return Utils.getFacialAreaForIndex(this.selectedFile.model, embeddingIndex);
         },
         getCurrentFaceLabel() {
-          if (this.selectedBoundingBoxIndex === null || !this.selectedFile) return null;
-          const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-          if (!facialArea) return null;
-          const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
-          return key ? this.faceLabels[key] || null : null;
+          return Utils.getCurrentFaceLabel(this.selectedFile, this.selectedBoundingBoxIndex, this.faceLabels);
         },
         getCurrentPointLabel() {
-          if (this.selectedPointLabelId === null) return null;
-          return this.pointLabelPersons[this.selectedPointLabelId] || null;
+          return Utils.getCurrentPointLabel(this.selectedPointLabelId, this.pointLabelPersons);
         },
         isPersonCheckedForPoint(pointLabelId, personId) {
-          if (!pointLabelId || !personId) return false;
-          const checkedPeople = this.checkedPeopleByPoint[pointLabelId] || {};
-          return !!checkedPeople[personId];
+          return Utils.isPersonCheckedForPoint(this.checkedPeopleByPoint, pointLabelId, personId);
         },
         setPersonCheckedForPoint(pointLabelId, personId, checked) {
           if (!pointLabelId || !personId) return;
@@ -2119,13 +1443,17 @@
             case 'ArrowLeft':
               event.preventDefault();
               if (this.hasPrevImage) {
-                this.goPrevImage();
+                this.bannerVisible = true;
+                // Emit event to trigger prev image navigation
+                this.$refs.imageAnnotationPanel?.goPrevImage();
               }
               break;
             case 'ArrowRight':
               event.preventDefault();
               if (this.hasNextImage) {
-                this.goNextImage();
+                this.bannerVisible = true;
+                // Emit event to trigger next image navigation
+                this.$refs.imageAnnotationPanel?.goNextImage();
               }
               break;
           }
@@ -2190,69 +1518,6 @@
             console.error('Error navigating to next bounding box:', error);
           }
         },
-        handleTouchStart(event) {
-          // Only handle touches when user is logged in, not loading, and an image is selected
-          if (!this.user || this.loading || !this.selectedImage) return;
-          
-          // Get the first touch point
-          const touch = event.touches[0];
-          this.touchStartX = touch.clientX;
-          this.touchStartY = touch.clientY;
-          this.isSwipe = false; // Reset swipe flag
-        },
-        handleTouchEnd(event) {
-          // Only handle if we have a start position
-          if (this.touchStartX === null || this.touchStartY === null) return;
-          if (!this.user || this.loading || !this.selectedImage) {
-            this.touchStartX = null;
-            this.touchStartY = null;
-            return;
-          }
-          
-          // Get the end touch point
-          const touch = event.changedTouches[0];
-          const touchEndX = touch.clientX;
-          const touchEndY = touch.clientY;
-          
-          // Calculate the difference
-          const deltaX = touchEndX - this.touchStartX;
-          const deltaY = touchEndY - this.touchStartY;
-          
-          // Minimum swipe distance (in pixels)
-          const minSwipeDistance = 50;
-          
-          // Check if it's a horizontal swipe (more horizontal than vertical)
-          if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > minSwipeDistance) {
-            // Prevent default to avoid any unwanted behavior
-            event.preventDefault();
-            this.isSwipe = true;
-            
-            // Hide banner on swipe
-            this.bannerVisible = false;
-            
-            if (deltaX > 0) {
-              // Swipe right - go to previous image
-              if (this.hasPrevImage) {
-                this.goPrevImage();
-              }
-            } else {
-              // Swipe left - go to next image
-              if (this.hasNextImage) {
-                this.goNextImage();
-              }
-            }
-          } else {
-            // It's a tap (not a swipe) - show banner
-            if (Math.abs(deltaX) < 10 && Math.abs(deltaY) < 10) {
-              // Very small movement, treat as tap
-              this.bannerVisible = !this.bannerVisible;
-            }
-          }
-          
-          // Reset touch positions
-          this.touchStartX = null;
-          this.touchStartY = null;
-        }
       },
       computed: {
         sessions() {
@@ -2323,90 +1588,6 @@
       },
     });
 
-    app.component('directory-tree', {
-      props: ['nodes', 'selectedFile', 'isRootLevel'],
-      data() {
-        return {
-          collapsed: {} // Track collapsed state for directories
-        };
-      },
-      mounted() {
-        this.setupInitialExpansion();
-      },
-      watch: {
-        nodes: {
-          handler() {
-            this.setupInitialExpansion();
-          },
-          immediate: true
-        }
-      },
-      methods: {
-        setupInitialExpansion() {
-          // Auto-expand the first (latest) date folder at root level
-          if (this.isRootLevel && this.nodes && this.nodes.length > 0) {
-            console.log('Setting up initial expansion for root level with', this.nodes.length, 'nodes');
-            const firstNode = this.nodes[0];
-            console.log('First node:', firstNode);
-            if (firstNode.type === 'directory') {
-              console.log('Expanding first directory:', firstNode.name);
-              this.collapsed[firstNode.name] = false; // Expand the latest date folder
-            }
-            // Collapse all other directories at root level
-            this.nodes.slice(1).forEach(node => {
-              if (node.type === 'directory') {
-                console.log('Collapsing directory:', node.name);
-                this.collapsed[node.name] = true; // Collapse other date folders
-              }
-            });
-            console.log('Final collapsed state:', this.collapsed);
-          }
-        },
-        toggleCollapse(node) {
-          this.collapsed = { ...this.collapsed, [node.name]: !this.collapsed[node.name] };
-        },
-        isCollapsed(node) {
-          // For directories, check if explicitly set in collapsed object
-          if (node.type === 'directory') {
-            if (this.collapsed[node.name] === undefined) {
-              return true; // Default to collapsed if not explicitly set
-            }
-            return this.collapsed[node.name]; // Return the explicit value (true/false)
-          }
-          return false; // Files are never collapsed
-        },
-        isSelected(node) {
-          return this.selectedFile && this.selectedFile.name === node.name && this.selectedFile.mediaLink === node.mediaLink;
-        }
-      },
-      template: `
-        <ul class="select-none">
-          <li v-for="node in nodes" :key="node.name" class="">
-            <div v-if="node.type === 'directory'" @click="toggleCollapse(node)" class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 text-gray-800 text-sm leading-tight font-[Arial_Narrow,Arial,sans-serif]">
-              <svg :class="['h-4 w-4 text-gray-500 transform transition-transform', { 'rotate-0': isCollapsed(node), '-rotate-90': !isCollapsed(node) }]" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path fill-rule="evenodd" d="M12.03 5.47a.75.75 0 0 1 0 1.06L9.06 9.5l2.97 2.97a.75.75 0 1 1-1.06 1.06l-3.5-3.5a.75.75 0 0 1 0-1.06l3.5-3.5a.75.75 0 0 1 1.06 0Z" clip-rule="evenodd" />
-              </svg>
-              <svg class="h-4 w-4 text-amber-500" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M10 4H4a2 2 0 0 0-2 2v1h20V8a2 2 0 0 0-2-2h-8l-2-2Z"/>
-                <path d="M22 9H2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9Z"/>
-              </svg>
-              <span class="font-medium truncate">{{ node.name }}</span>
-            </div>
-            <div v-else @click="$emit('select', node)" :class="['group flex items-center gap-2 pl-9 pr-2 py-1.5 cursor-pointer hover:bg-blue-50 text-xs leading-tight font-[Arial_Narrow,Arial,sans-serif]', { 'bg-blue-100 text-blue-800': isSelected(node), 'text-gray-700': !isSelected(node) } ]">
-              <svg class="h-4 w-4 text-gray-400 group-hover:text-blue-500" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Z"/>
-              </svg>
-              <span class="truncate">{{ node.name }}</span>
-            </div>
-
-            <transition name="fade" mode="out-in">
-              <div v-show="!isCollapsed(node) && node.children.length" class="ml-4 border-l border-gray-200">
-                <directory-tree :nodes="node.children" :selected-file="selectedFile" :is-root-level="false" @select="$emit('select', $event)"></directory-tree>
-              </div>
-            </transition>
-          </li>
-        </ul>`
-    });
 
     app.component('image-annotation', {
       props: ['imageSrc', 'annotations', 'selectedFile', 'showFaces', 'faceLabels', 'selectedBoundingBoxIndex', 'pointLabels', 'selectedPointLabelId', 'pointLabelPersons', 'checkedPeopleByPoint', 'getFaceLabelKey', 'checkedPeopleByBox', 'planningCentrePeople', 'getHouseholdMembers'],
@@ -3097,8 +2278,6 @@
           if (event.evt.shiftKey) {
             const stage = event.target.getStage();
             const pointerPos = stage.getPointerPosition();
-            const container = stage.container();
-            const containerRect = container.getBoundingClientRect();
             
             // Calculate tooltip position relative to the container
             this.tooltipX = pointerPos.x + 10; // Offset to the right of cursor
@@ -3271,12 +2450,12 @@
       app.component('control-side-panel', window.Components.ControlSidePanel);
       app.component('image-annotation-panel', window.Components.ImageAnnotationPanel);
       app.component('check-in-overlay', window.Components.CheckInOverlay);
-      
-      app.use(VueKonva);
-      const vueApp = app.mount('#app');
 
-      // Setup resizer functionality after Vue app is mounted
-      // Setup resizer after Vue app is mounted with a delay to ensure DOM is ready
+    app.use(VueKonva);
+    const vueApp = app.mount('#app');
+
+    // Setup resizer functionality after Vue app is mounted
+    // Setup resizer after Vue app is mounted with a delay to ensure DOM is ready
       setTimeout(Utils.setupResizer, 100);
     })().catch(console.error);
   </script>

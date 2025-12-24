@@ -131,6 +131,86 @@ export const embeddingService = {
   },
 
   /**
+   * Find best match for a query embedding
+   * @param {Object} embeddingIndex - The EmbeddingIndex instance
+   * @param {Array} queryEmbedding - The query embedding array
+   * @param {number} similarityThreshold - Minimum similarity threshold (default: 0.80)
+   * @returns {Object|null} - Match object with personId, similarity, and embedding, or null if no match
+   */
+  async findBestMatch(embeddingIndex, queryEmbedding, similarityThreshold = 0.80) {
+    if (!queryEmbedding) {
+      console.error('findBestMatch: queryEmbedding is null or undefined');
+      return null;
+    }
+    
+    if (!Array.isArray(queryEmbedding)) {
+      console.error('findBestMatch: queryEmbedding is not an array. Type:', typeof queryEmbedding, 'Value:', queryEmbedding);
+      return null;
+    }
+    
+    if (queryEmbedding.length === 0) {
+      console.error('findBestMatch: queryEmbedding is an empty array');
+      return null;
+    }
+    
+    if (!embeddingIndex) {
+      console.error('findBestMatch: embeddingIndex is null. Has it been initialized?');
+      return null;
+    }
+    
+    try {
+      // Search for top match
+      const results = await embeddingIndex.search(queryEmbedding, { topK: 1 });
+      
+      if (results && results.length > 0) {
+        const bestResult = results[0];
+        
+        // Check if similarity is above threshold
+        // client-vector-search returns similarity scores (typically 0-1 for cosine similarity)
+        // The result might have similarity, score, or distance (inverted)
+        let similarity = bestResult.similarity || bestResult.score || 0;
+        
+        // If distance is provided instead, convert to similarity (assuming cosine distance)
+        if (bestResult.distance !== undefined && similarity === 0) {
+          similarity = 1 - bestResult.distance; // Convert distance to similarity
+        }
+        
+        // Extract personId from the result
+        let personId = null;
+        
+        // Try different ways to get personId
+        if (bestResult.personId) {
+          personId = bestResult.personId;
+        } else if (bestResult.id) {
+          // Extract from id format: "personId_index"
+          personId = bestResult.id.split('_')[0];
+        } else if (bestResult.object && bestResult.object.personId) {
+          personId = bestResult.object.personId;
+        } else if (bestResult.item && bestResult.item.personId) {
+          personId = bestResult.item.personId;
+        }
+        
+        console.log('Extracted personId:', personId, 'similarity:', similarity);
+        
+        if (similarity >= similarityThreshold && personId) {
+          return {
+            personId: personId,
+            similarity: similarity,
+            embedding: bestResult.embedding || bestResult.object?.embedding || bestResult.item?.embedding
+          };
+        } else {
+          console.log(`Match below threshold: similarity=${similarity}, threshold=${similarityThreshold}, personId=${personId}`);
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error finding best match:', error);
+      return null;
+    }
+  },
+
+  /**
    * Store embedding in database
    */
   async storeEmbedding(personId, embeddingData) {

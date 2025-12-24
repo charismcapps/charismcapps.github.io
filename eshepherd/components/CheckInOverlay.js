@@ -37,9 +37,98 @@ export const CheckInOverlay = {
     successMessage: {
       type: String,
       default: ''
+    },
+    user: {
+      type: Object,
+      default: null
     }
   },
-  emits: ['close', 'submit', 'toggle-select-all', 'checkbox-change'],
+  emits: [
+    'close', 
+    'submit', 
+    'toggle-select-all', 
+    'checkbox-change',
+    'submitting-change',
+    'error-change',
+    'success-message-change'
+  ],
+  computed: {
+    selectedPersonIds() {
+      // Get person IDs from the selection object
+      return Object.keys(this.selection).filter(personId => this.selection[personId]);
+    }
+  },
+  methods: {
+    async performCheckIn() {
+      if (this.submitting) {
+        return;
+      }
+      
+      if (!this.selectedPersonIds.length) {
+        this.$emit('error-change', 'Select at least one person to check in.');
+        this.$emit('success-message-change', '');
+        return;
+      }
+      
+      if (!this.user) {
+        this.$emit('error-change', 'You must be signed in to perform check-in.');
+        this.$emit('success-message-change', '');
+        return;
+      }
+      
+      try {
+        this.$emit('submitting-change', true);
+        this.$emit('error-change', null);
+        this.$emit('success-message-change', '');
+        
+        const Services = window.Services;
+        if (!Services || !Services.planningCenter) {
+          throw new Error('Planning Center service not available');
+        }
+        
+        const result = await Services.planningCenter.performCheckIn(this.user, this.selectedPersonIds);
+        
+        if (result.success) {
+          const successMsg = result.data?.message || 'Check-in request submitted successfully.';
+          this.$emit('success-message-change', successMsg);
+          
+          if (result.data && typeof result.data === 'object') {
+            const {
+              success,
+              total_persons_received,
+              already_checked_in,
+              people_to_update
+            } = result.data;
+            
+            const lines = [];
+            if (typeof success !== 'undefined') {
+              lines.push(`Success: ${success ? 'Yes' : 'No'}`);
+            }
+            if (typeof total_persons_received !== 'undefined') {
+              lines.push(`Total persons received: ${total_persons_received}`);
+            }
+            if (typeof already_checked_in !== 'undefined') {
+              lines.push(`Already checked in: ${already_checked_in}`);
+            }
+            if (typeof people_to_update !== 'undefined') {
+              lines.push(`People to update: ${people_to_update}`);
+            }
+            
+            if (lines.length > 0) {
+              alert(lines.join('\n'));
+            }
+          }
+        } else {
+          this.$emit('error-change', result.error || 'Failed to perform check-in.');
+        }
+      } catch (error) {
+        console.error('Error performing check-in:', error);
+        this.$emit('error-change', error.message || 'Failed to perform check-in. Please check your internet connection and try again.');
+      } finally {
+        this.$emit('submitting-change', false);
+      }
+    }
+  },
   template: `
     <div
       v-if="show"
@@ -74,7 +163,7 @@ export const CheckInOverlay = {
           </button>
           <div class="ml-auto flex items-center gap-2">
             <button
-              @click="$emit('submit')"
+              @click="performCheckIn"
               :disabled="selectedCount === 0 || submitting"
               class="px-4 py-2 rounded-md text-sm font-semibold text-white flex items-center gap-2"
               :class="selectedCount === 0 || submitting ? 'bg-green-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'"
