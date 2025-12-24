@@ -3,7 +3,7 @@ import * as embeddingUtils from './utils/embeddingUtils.js';
 import * as sessionUtils from './utils/sessionUtils.js';
 import * as faceAnnotationUtils from './utils/faceAnnotationUtils.js';
 import * as faceRecognitionUtils from './utils/faceRecognition.js';
-import { setupResizer } from './utils/resizer.js';
+import { setupResizer, getContainerDimensions, calculateOptimalSize, updateImageDimensions } from './utils/resizer.js';
 import { firebaseConfig, auth, database } from './config/firebase.js';
 import { authService } from './services/authService.js';
 import { fileService } from './services/fileService.js';
@@ -57,7 +57,10 @@ window.Utils = {
   matchFacesInImage: faceRecognitionUtils.matchFacesInImage,
   applyFaceMatches: faceRecognitionUtils.applyFaceMatches,
   
-  // Resizer utility
-  setupResizer: setupResizer
+  // Resizer utilities
+  setupResizer: setupResizer,
+  getContainerDimensions: getContainerDimensions,
+  calculateOptimalSize: calculateOptimalSize,
+  updateImageDimensions: updateImageDimensions
 };
 

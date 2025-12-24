@@ -266,7 +266,7 @@ export const ImageAnnotationPanel = {
         </div>
         <div class="flex-1 w-full flex flex-col items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
           <div class="flex-1 w-full flex items-center justify-center relative">
-            <image-annotation 
+            <image-annotation-canvas 
               v-if="selectedImage" 
               :image-src="selectedImage" 
               :annotations="annotations" 
@@ -286,7 +286,7 @@ export const ImageAnnotationPanel = {
               @face-box-click="$emit('face-box-click', $event)"
               @point-label-click="$emit('point-label-click', $event)"
               @point-label-create="$emit('point-label-create', $event)"
-            ></image-annotation>
+            ></image-annotation-canvas>
             <p v-else class="text-gray-500">Select a session to view images</p>
           </div>
           <div v-if="selectedImage && !imageLoading" class="text-xs text-gray-500 mt-2 pb-2">

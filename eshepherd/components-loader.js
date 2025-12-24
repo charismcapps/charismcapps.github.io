@@ -2,11 +2,13 @@
 import { ControlSidePanel } from './components/ControlSidePanel.js';
 import { ImageAnnotationPanel } from './components/ImageAnnotationPanel.js';
 import { CheckInOverlay } from './components/CheckInOverlay.js';
+import { ImageAnnotationCanvas } from './components/ImageAnnotationCanvas.js';
 
 // Expose components globally for registration in index.html
 window.Components = {
   ControlSidePanel,
   ImageAnnotationPanel,
-  CheckInOverlay
+  CheckInOverlay,
+  ImageAnnotationCanvas
 };
 
