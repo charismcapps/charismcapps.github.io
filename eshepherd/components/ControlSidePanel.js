@@ -10,6 +10,7 @@ export const ControlSidePanel = {
     peopleRetrievalStatus: String,
     peopleRetrievalCount: Number,
     selectedBoundingBoxIndex: Number,
+    selectedOverlapBox: Object,
     selectedPointLabelId: String,
     labellingStarted: Boolean,
     searchQuery: String,
@@ -61,6 +62,16 @@ export const ControlSidePanel = {
       return this.faceScanCount?.[this.selectedFile.name] || 0;
     },
     getCurrentFaceLabel() {
+      // Check for overlap box first
+      if (this.selectedOverlapBox) {
+        const { sourceFile, facialArea } = this.selectedOverlapBox;
+        if (sourceFile && facialArea) {
+          const key = this.getFaceLabelKey(sourceFile.name, facialArea);
+          return key ? this.faceLabels[key] : null;
+        }
+        return null;
+      }
+      // Otherwise check for regular box
       if (typeof window !== 'undefined' && window.Utils) {
         return window.Utils.getCurrentFaceLabel(this.selectedFile, this.selectedBoundingBoxIndex, this.faceLabels);
       }
@@ -73,6 +84,20 @@ export const ControlSidePanel = {
       return null;
     },
     getSelectedPersonCheckedState() {
+      // Check for overlap box first
+      if (this.selectedOverlapBox) {
+        const { sourceFile, facialArea } = this.selectedOverlapBox;
+        if (sourceFile && facialArea) {
+          const key = this.getFaceLabelKey(sourceFile.name, facialArea);
+          const label = key ? this.faceLabels[key] : null;
+          if (label && label.id) {
+            const checked = this.checkedPeopleByBox[key];
+            return checked && checked[label.id] ? true : false;
+          }
+        }
+        return false;
+      }
+      // Otherwise check for regular box
       if (typeof window !== 'undefined' && window.Utils) {
         return window.Utils.getSelectedPersonCheckedState(this.selectedFile, this.selectedBoundingBoxIndex, this.faceLabels, this.checkedPeopleByBox, false);
       }
@@ -93,19 +118,28 @@ export const ControlSidePanel = {
       const embeddingsCount = this.embeddingsCountCache?.[currentLabel.id] || 0;
       
       // Check if there's a match for the current bounding box
-      if (this.selectedBoundingBoxIndex === null || !this.selectedFile || !this.selectedFile.name) {
+      let targetFile = this.selectedFile;
+      let targetEmbeddingIndex = this.selectedBoundingBoxIndex;
+      let imageKey = targetFile?.name;
+      
+      if (this.selectedOverlapBox) {
+        targetFile = this.selectedOverlapBox.sourceFile;
+        targetEmbeddingIndex = this.selectedOverlapBox.embeddingIndex;
+        imageKey = targetFile?.name;
+      }
+      
+      if (targetEmbeddingIndex === null || !targetFile || !imageKey) {
         return `${embeddingsCount} Embeddings in DB`;
       }
       
-      const imageKey = this.selectedFile.name;
       const matchCache = this.faceMatchCache?.[imageKey];
       
-      if (!matchCache || !matchCache[this.selectedBoundingBoxIndex]) {
+      if (!matchCache || !matchCache[targetEmbeddingIndex]) {
         // No match found for this face
         return `No Match. ${embeddingsCount} Embeddings in DB`;
       }
       
-      const match = matchCache[this.selectedBoundingBoxIndex];
+      const match = matchCache[targetEmbeddingIndex];
       
       // Check if the selected person matches the top match
       if (match.personId === currentLabel.id) {
@@ -118,6 +152,16 @@ export const ControlSidePanel = {
       }
     },
     getEmbeddingsStoredState() {
+      // Check for overlap box first
+      if (this.selectedOverlapBox) {
+        const { sourceFile, facialArea } = this.selectedOverlapBox;
+        if (sourceFile && facialArea) {
+          const key = this.getFaceLabelKey(sourceFile.name, facialArea);
+          return key ? (this.embeddingsStored[key] || false) : false;
+        }
+        return false;
+      }
+      // Otherwise check for regular box
       if (typeof window !== 'undefined' && window.Utils) {
         return window.Utils.getEmbeddingsStoredState(this.selectedFile, this.selectedBoundingBoxIndex, this.embeddingsStored);
       }
@@ -156,6 +200,11 @@ export const ControlSidePanel = {
       return null;
     },
     getFacialAreaForIndex(embeddingIndex) {
+      // Check for overlap box first
+      if (this.selectedOverlapBox) {
+        return this.selectedOverlapBox.facialArea || null;
+      }
+      // Otherwise check for regular box
       if (!this.selectedFile || !this.selectedFile.model) return null;
       if (typeof window !== 'undefined' && window.Utils) {
         return window.Utils.getFacialAreaForIndex(this.selectedFile.model, embeddingIndex);
@@ -163,6 +212,15 @@ export const ControlSidePanel = {
       return null;
     },
     getCurrentFaceLabelKey() {
+      // Check for overlap box first
+      if (this.selectedOverlapBox) {
+        const { sourceFile, facialArea } = this.selectedOverlapBox;
+        if (sourceFile && facialArea) {
+          return this.getFaceLabelKey(sourceFile.name, facialArea);
+        }
+        return null;
+      }
+      // Otherwise check for regular box
       if (typeof window !== 'undefined' && window.Utils) {
         return window.Utils.getCurrentFaceLabelKey(this.selectedFile, this.selectedBoundingBoxIndex);
       }
@@ -305,23 +363,32 @@ export const ControlSidePanel = {
       }
     },
     async loadFaceGuesses() {
-      if (this.selectedBoundingBoxIndex === null || !this.selectedFile || !this.selectedFile.model) {
+      // Check for overlap box first
+      let targetFile = this.selectedFile;
+      let targetEmbeddingIndex = this.selectedBoundingBoxIndex;
+      
+      if (this.selectedOverlapBox) {
+        targetFile = this.selectedOverlapBox.sourceFile;
+        targetEmbeddingIndex = this.selectedOverlapBox.embeddingIndex;
+      }
+      
+      if (targetEmbeddingIndex === null || !targetFile || !targetFile.model) {
         this.$emit('face-guesses-update', []);
         return;
       }
       
       try {
         // Load embedding data for the selected bounding box
-        const model = typeof this.selectedFile.model === 'string' 
-          ? JSON.parse(this.selectedFile.model) 
-          : this.selectedFile.model;
+        const model = typeof targetFile.model === 'string' 
+          ? JSON.parse(targetFile.model) 
+          : targetFile.model;
         
         if (!model.embeddings || !Array.isArray(model.embeddings)) {
           this.$emit('face-guesses-update', []);
           return;
         }
         
-        const embedding = model.embeddings[this.selectedBoundingBoxIndex];
+        const embedding = model.embeddings[targetEmbeddingIndex];
         if (!embedding || !embedding.embedding || !embedding.facial_area) {
           this.$emit('face-guesses-update', []);
           return;
@@ -480,7 +547,19 @@ export const ControlSidePanel = {
           this.$nextTick(() => {
             this.loadFaceGuesses();
           });
-        } else {
+        } else if (!this.selectedOverlapBox) {
+          this.$emit('face-guesses-update', []);
+        }
+      },
+      immediate: false
+    },
+    selectedOverlapBox: {
+      handler(newVal) {
+        if (newVal !== null && newVal.sourceFile) {
+          this.$nextTick(() => {
+            this.loadFaceGuesses();
+          });
+        } else if (!this.selectedBoundingBoxIndex) {
           this.$emit('face-guesses-update', []);
         }
       },
@@ -488,7 +567,7 @@ export const ControlSidePanel = {
     },
     selectedFile: {
       handler() {
-        if (this.selectedBoundingBoxIndex !== null && this.selectedFile) {
+        if ((this.selectedBoundingBoxIndex !== null || this.selectedOverlapBox !== null) && this.selectedFile) {
           this.$nextTick(() => {
             this.loadFaceGuesses();
           });
@@ -583,7 +662,7 @@ export const ControlSidePanel = {
       </div>
       
       <!-- Face Search Box -->
-      <div v-if="(selectedBoundingBoxIndex !== null || selectedPointLabelId !== null) && labellingStarted" class="mt-3">
+      <div v-if="(selectedBoundingBoxIndex !== null || selectedOverlapBox !== null || selectedPointLabelId !== null) && labellingStarted" class="mt-3">
         <label class="block text-xs font-semibold text-gray-600 mb-2">Search for Person</label>
         <input
           :value="searchQuery"
@@ -599,7 +678,7 @@ export const ControlSidePanel = {
           :class="['w-full px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500', peopleRetrievalStatus === 'retrieving' ? 'bg-gray-100 cursor-not-allowed opacity-60' : '']"
         />
         <!-- Face Guesses (Top 5 Matches) - Only show for bounding boxes, not point labels, and only when no person is selected -->
-        <div v-if="faceGuesses.length > 0 && !searchQuery && selectedBoundingBoxIndex !== null && !getCurrentFaceLabel" class="mt-2 border border-gray-200 rounded-md overflow-hidden">
+        <div v-if="faceGuesses.length > 0 && !searchQuery && (selectedBoundingBoxIndex !== null || selectedOverlapBox !== null) && !getCurrentFaceLabel" class="mt-2 border border-gray-200 rounded-md overflow-hidden">
           <div class="px-2 py-1 bg-gray-100 border-b border-gray-200">
             <span class="text-xs font-semibold text-gray-600">Top Matches</span>
           </div>
@@ -641,7 +720,7 @@ export const ControlSidePanel = {
       </div>
       
       <!-- Selected Face Label -->
-      <div v-if="selectedBoundingBoxIndex !== null && getCurrentFaceLabel" class="mt-3">
+      <div v-if="(selectedBoundingBoxIndex !== null || selectedOverlapBox !== null) && getCurrentFaceLabel" class="mt-3">
         <label class="block text-xs font-semibold text-gray-600 mb-2">Check-In Persons</label>
         
         <!-- Selected Person -->

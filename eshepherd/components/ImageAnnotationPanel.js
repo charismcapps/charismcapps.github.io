@@ -13,6 +13,7 @@ export const ImageAnnotationPanel = {
     hasPrevImage: Boolean,
     hasNextImage: Boolean,
     selectedBoundingBoxIndex: Number,
+    selectedOverlapBox: Object,
     annotations: Array,
     showFaces: Boolean,
     faceLabels: Object,
@@ -274,6 +275,7 @@ export const ImageAnnotationPanel = {
               :show-faces="showFaces" 
               :face-labels="faceLabels" 
               :selected-bounding-box-index="selectedBoundingBoxIndex" 
+              :selected-overlap-box="selectedOverlapBox"
               :point-labels="pointLabels" 
               :selected-point-label-id="selectedPointLabelId" 
               :point-label-persons="pointLabelPersons" 
@@ -282,8 +284,13 @@ export const ImageAnnotationPanel = {
               :checked-people-by-box="checkedPeopleByBox" 
               :planning-centre-people="planningCentrePeople" 
               :get-household-members="getHouseholdMembers" 
+              :current-folder-files="currentFolderFiles"
+              :fetch-model-data="fetchModelData"
               @loading-change="$emit('loading-change', $event)"
               @face-box-click="$emit('face-box-click', $event)"
+              @overlap-face-box-click="$emit('overlap-face-box-click', $event)"
+              @overlap-box-deselected="$emit('overlap-box-deselected')"
+              @face-box-deselected="$emit('face-box-deselected')"
               @point-label-click="$emit('point-label-click', $event)"
               @point-label-create="$emit('point-label-create', $event)"
             ></image-annotation-canvas>
