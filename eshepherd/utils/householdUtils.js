@@ -77,3 +77,11 @@ export function getHouseholdMembersDisplay(person, planningCentrePeople) {
   return display;
 }
 
+/**
+ * Get person by ID from planning centre people
+ */
+export function getPersonById(personId, planningCentrePeople) {
+  if (!personId || !planningCentrePeople) return null;
+  return planningCentrePeople.find(p => p.id === personId) || null;
+}
+

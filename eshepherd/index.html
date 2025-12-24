@@ -21,6 +21,10 @@
   <script src="https://unpkg.com/konva@9/konva.min.js"></script>
   <!--2. Link VueKonva Javascript -->
   <script src="https://unpkg.com/vue-konva@3/dist/vue-konva.umd.js"></script>
+  <!-- Load utility modules -->
+  <script type="module" src="utils-loader.js"></script>
+  <!-- Load component modules -->
+  <script type="module" src="components-loader.js"></script>
   <!-- Replace Tailwind CDN with a local installation or CLI setup for production -->
 </head>
 <body class="bg-gray-100">
@@ -41,432 +45,151 @@
     
     <!-- Main Content Area -->
     <div :class="['main-content', { 'banner-hidden': !bannerVisible }]">
-      <!-- Left Pane: Sessions Dropdown -->
+      <!-- Left Pane: Control Side Panel -->
       <div :class="['directory-pane text-xs transition-all duration-200 bg-blue-50', { 'border-r border-gray-200': !sidebarCollapsed }]" :style="sidebarCollapsed ? { width: '0px', minWidth: '0px' } : { minWidth: '200px' }" id="directoryPane">
-        <div v-show="!sidebarCollapsed && user" class="p-3 h-full flex flex-col" style="position: relative; z-index: 1;">
-          <label class="block text-xs font-semibold text-gray-600 mb-2">Session</label>
-          <select
-            v-model="selectedSessionName"
-            @change="onSessionChange"
-            :disabled="loading"
-            class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
-            style="position: relative; z-index: 10;"
-          >
-            <option value="" disabled>Select a session</option>
-            <option
-              v-for="session in sessions"
-              :key="session.name"
-              :value="session.name"
-            >
-              {{ session.name }}
-            </option>
-          </select>
-          
-          <!-- Show Faces Toggle -->
-          <div v-if="selectedFile && selectedFile.model_url" class="mt-3">
-            <button
-              @click="handleFacesButtonClick"
-              :class="['w-full px-2 py-1 text-xs rounded border transition-colors', getFacesButtonClass()]"
-            >
-              {{ getFacesButtonText() }}
-            </button>
-          </div>
-          
-          <!-- People Retrieval Status -->
-          <div v-if="peopleRetrievalStatus !== 'idle'" class="mt-3">
-            <div v-if="peopleRetrievalStatus === 'retrieving'" class="flex items-center gap-2 text-xs text-gray-600">
-              <div class="spinner-small"></div>
-              <span>Retrieving people records...</span>
-            </div>
-            <div v-else-if="peopleRetrievalStatus === 'completed'" class="text-xs text-gray-600">
-              <div class="flex items-center justify-between">
-                <span>Retrieved {{ peopleRetrievalCount }} records</span>
-                <button
-                  @click="fetchPlanningCentrePeople"
-                  :disabled="peopleRetrievalStatus === 'retrieving'"
-                  class="ml-2 text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-                  title="Reload people records from Planning Centre"
-                >
-                  Reload Records
-                </button>
-              </div>
-              <div v-if="selectedFile && getFaceScanningStatus()" class="mt-1">
-                <div v-if="getFaceScanningStatus() === 'scanning'" class="flex items-center gap-2 text-gray-600">
-                  <div class="spinner-small"></div>
-                  <span>Scanning Faces...</span>
-                </div>
-                <div v-else-if="getFaceScanningStatus() === 'scanned'" class="flex items-center justify-between text-gray-500">
-                  <span>{{ getFaceScanCount() }} Faces Scanned</span>
-                  <button
-                    @click="reloadEmbeddingsIndex"
-                    class="ml-2 text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-                    title="Reload embeddings from database"
-                  >
-                    Reload Embeddings
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Face Search Box -->
-          <div v-if="(selectedBoundingBoxIndex !== null || selectedPointLabelId !== null) && labellingStarted" class="mt-3">
-            <label class="block text-xs font-semibold text-gray-600 mb-2">Search for Person</label>
-            <input
-              ref="searchInput"
-              v-model="searchQuery"
-              @input="performSearch"
-              @keydown="handleSearchKeydown"
-              type="text"
-              placeholder="Type to search..."
-              :disabled="peopleRetrievalStatus === 'retrieving'"
-              autocomplete="off"
-              autocorrect="off"
-              autocapitalize="off"
-              spellcheck="false"
-              :class="['w-full px-2 py-1 text-xs border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500', peopleRetrievalStatus === 'retrieving' ? 'bg-gray-100 cursor-not-allowed opacity-60' : '']"
-            />
-            <!-- Face Guesses (Top 5 Matches) - Only show for bounding boxes, not point labels -->
-            <div v-if="faceGuesses.length > 0 && !searchQuery && selectedBoundingBoxIndex !== null" class="mt-2 border border-gray-200 rounded-md overflow-hidden">
-              <div class="px-2 py-1 bg-gray-100 border-b border-gray-200">
-                <span class="text-xs font-semibold text-gray-600">Top Matches</span>
-              </div>
-              <div>
-                <div
-                  v-for="(guess, index) in faceGuesses"
-                  :key="guess.person.id || index"
-                  @click="selectPerson(guess.person)"
-                  class="px-2 py-1.5 text-xs cursor-pointer border-b border-gray-100 last:border-b-0 hover:bg-blue-50"
-                >
-                  <div class="flex items-center justify-between">
-                    <div class="flex items-center flex-1 min-w-0">
-                      <span class="font-medium">{{ guess.person.name }}</span>
-                      <span v-if="getHouseholdMembers(guess.person).length > 0" class="ml-2 text-gray-500 text-[10px]">
-                        [{{ getHouseholdMembersDisplay(guess.person) }}]
-                      </span>
-                    </div>
-                    <span class="text-gray-600 ml-2 flex-shrink-0">{{ (guess.similarity * 100).toFixed(1) }}%</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <!-- Search Results -->
-            <div v-if="searchResults.length > 0" ref="searchResultsContainer" class="mt-2 border border-gray-200 rounded-md overflow-hidden search-results-scroll" style="max-height: 108px; overflow-y: auto; scrollbar-width: thin;">
-              <div
-                v-for="(person, index) in searchResults"
-                :key="person.id || index"
-                :ref="el => { if (el) searchResultRefs[index] = el }"
-                @click="selectPerson(person)"
-                :class="['px-2 py-1.5 text-xs cursor-pointer border-b border-gray-100 last:border-b-0', selectedSearchIndex === index ? 'bg-blue-200' : 'hover:bg-blue-50']"
-              >
-                <div class="flex items-center">
-                  <span class="font-medium">{{ person.name }}</span>
-                  <span v-if="getHouseholdMembers(person).length > 0" class="ml-2 text-gray-500 text-[10px]">
-                    [{{ getHouseholdMembersDisplay(person) }}]
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Selected Face Label -->
-          <div v-if="selectedBoundingBoxIndex !== null && getCurrentFaceLabel()" class="mt-3">
-            <label class="block text-xs font-semibold text-gray-600 mb-2">Check-In Persons</label>
-            
-            <!-- Selected Person -->
-            <div class="mb-2">
-              <div class="flex items-center justify-between px-2">
-                <span class="text-xs text-gray-800">{{ getCurrentFaceLabel().name }} ({{ getCurrentFaceLabel().id }})</span>
-                <input
-                  type="checkbox"
-                  :checked="getSelectedPersonCheckedState()"
-                  @change="handleSelectedPersonCheckboxChange"
-                  :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPersonCheckedState() ? 'opacity-50' : '']"
-                />
-              </div>
-            </div>
-            
-            <!-- Embeddings Stored -->
-            <div class="mb-2 px-2 flex items-center justify-between">
-              <span class="text-xs text-gray-600">{{ getMatchDisplayText() }}</span>
-              <button
-                @click="handleStoreEmbeddings"
-                :disabled="checkingEmbeddingInDB || getEmbeddingsStoredState()"
-                :class="['text-xs px-2 py-1 rounded border transition-colors flex items-center justify-center min-w-[120px]', (checkingEmbeddingInDB || getEmbeddingsStoredState()) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 text-white border-blue-600 hover:bg-blue-600']"
-              >
-                <span v-if="checkingEmbeddingInDB" class="flex items-center gap-1">
-                  <div class="spinner-small"></div>
-                </span>
-                <span v-else>{{ getEmbeddingsStoredState() ? 'Embedding Saved' : 'Add This Embedding [a]' }}</span>
-              </button>
-            </div>
-            
-            <!-- Household Groups -->
-            <div v-if="getHouseholdGroups(getCurrentFaceLabel()).length > 0" class="space-y-2">
-              <div
-                v-for="(group, groupIndex) in getHouseholdGroups(getCurrentFaceLabel())"
-                :key="groupIndex"
-                class="border border-gray-300 rounded bg-gray-50 py-1"
-              >
-                <div
-                  v-for="(member, memberIndex) in group.members"
-                  :key="member.id || memberIndex"
-                  class="flex items-center justify-between py-1 px-2"
-                >
-                  <span :class="['text-xs', getSelectedPersonCheckedState() ? 'text-gray-700' : 'text-gray-400']">{{ member.name }}</span>
-                  <input
-                    type="checkbox"
-                    :checked="getHouseholdCheckboxState(member.id)"
-                    @change="handleHouseholdCheckboxChange(member.id, $event)"
-                    :disabled="!getSelectedPersonCheckedState()"
-                    :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPersonCheckedState() ? 'opacity-50 cursor-not-allowed' : '']"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Point Label Person Selection (without match/embedding display) -->
-          <div v-if="selectedPointLabelId !== null && getCurrentPointLabel()" class="mt-3">
-            <label class="block text-xs font-semibold text-gray-600 mb-2">Check-In Persons</label>
-            
-            <!-- Selected Person -->
-            <div class="mb-2">
-              <div class="flex items-center justify-between px-2">
-                <span class="text-xs text-gray-800">{{ getCurrentPointLabel().name }} ({{ getCurrentPointLabel().id }})</span>
-                <input
-                  type="checkbox"
-                  :checked="getSelectedPointPersonCheckedState()"
-                  @change="handleSelectedPointPersonCheckboxChange"
-                  :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPointPersonCheckedState() ? 'opacity-50' : '']"
-                />
-              </div>
-            </div>
-            
-            <!-- Household Groups -->
-            <div v-if="getHouseholdGroups(getCurrentPointLabel()).length > 0" class="space-y-2">
-              <div
-                v-for="(group, groupIndex) in getHouseholdGroups(getCurrentPointLabel())"
-                :key="groupIndex"
-                class="border border-gray-300 rounded bg-gray-50 py-1"
-              >
-                <div
-                  v-for="(member, memberIndex) in group.members"
-                  :key="member.id || memberIndex"
-                  class="flex items-center justify-between py-1 px-2"
-                >
-                  <span :class="['text-xs', getSelectedPointPersonCheckedState() ? 'text-gray-700' : 'text-gray-400']">{{ member.name }}</span>
-                  <input
-                    type="checkbox"
-                    :checked="getPointHouseholdCheckboxState(member.id)"
-                    @change="handlePointHouseholdCheckboxChange(member.id, $event)"
-                    :disabled="!getSelectedPointPersonCheckedState()"
-                    :class="['w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500', !getSelectedPointPersonCheckedState() ? 'opacity-50 cursor-not-allowed' : '']"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          <!-- Check-In Actions -->
-          <div class="mt-auto border-t border-gray-200 pt-4">
-            <div v-if="selectedSessionName" class="mb-3">
-              <div class="text-xs text-gray-600 mb-2">
-                <div>Valid Check-In Period:</div>
-                <div class="font-medium">{{ getSessionValidTimeRangeString() }}</div>
-              </div>
-              <div v-if="!isSessionValid()" class="text-xs text-red-600 mb-2">
-                {{ getSessionInvalidMessage() }}
-              </div>
-            </div>
-            <button
-              @click="openCheckInOverlay"
-              :disabled="getSelectedCheckInPersonIds().length === 0 || !isSessionValid()"
-              class="w-full text-sm font-semibold px-3 py-2 rounded-md border transition-colors"
-              :class="(getSelectedCheckInPersonIds().length === 0 || !isSessionValid()) ? 'bg-gray-200 text-gray-500 cursor-not-allowed border-gray-200' : 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'"
-            >
-              Check In
-            </button>
-          </div>
-          
-        </div>
+        <control-side-panel
+          v-show="!sidebarCollapsed && user"
+          :user="user"
+          :loading="loading"
+          :sessions="sessions"
+          :selected-session-name="selectedSessionName"
+          :selected-file="selectedFile"
+          :people-retrieval-status="peopleRetrievalStatus"
+          :people-retrieval-count="peopleRetrievalCount"
+          :selected-bounding-box-index="selectedBoundingBoxIndex"
+          :selected-point-label-id="selectedPointLabelId"
+          :labelling-started="labellingStarted"
+          :search-query="searchQuery"
+          :search-results="searchResults"
+          :selected-search-index="selectedSearchIndex"
+          :face-guesses="faceGuesses"
+          :planning-centre-people="planningCentrePeople"
+          :checking-embedding-in-d-b="checkingEmbeddingInDB"
+          :check-in-overlay-selection="checkInOverlaySelection"
+          :check-in-submitting="checkInSubmitting"
+          :check-in-error="checkInError"
+          :check-in-success-message="checkInSuccessMessage"
+          :get-faces-button-text="getFacesButtonText"
+          :get-faces-button-class="getFacesButtonClass"
+          :get-face-scanning-status="getFaceScanningStatus"
+          :get-face-scan-count="getFaceScanCount"
+          :get-current-face-label="getCurrentFaceLabel"
+          :get-current-point-label="getCurrentPointLabel"
+          :get-selected-person-checked-state="getSelectedPersonCheckedState"
+          :get-selected-point-person-checked-state="getSelectedPointPersonCheckedState"
+          :get-household-checkbox-state="getHouseholdCheckboxState"
+          :get-point-household-checkbox-state="getPointHouseholdCheckboxState"
+          :get-household-groups="getHouseholdGroups"
+          :get-household-members="getHouseholdMembers"
+          :get-household-members-display="getHouseholdMembersDisplay"
+          :get-match-display-text="getMatchDisplayText"
+          :get-embeddings-stored-state="getEmbeddingsStoredState"
+          :get-selected-check-in-person-ids="getSelectedCheckInPersonIds"
+          :get-session-valid-time-range-string="getSessionValidTimeRangeString"
+          :is-session-valid="isSessionValid"
+          :get-session-invalid-message="getSessionInvalidMessage"
+          :get-check-in-table-data="getCheckInTableData"
+          :get-overlay-selected-count="getOverlaySelectedCount"
+          :are-all-check-in-selected="areAllCheckInSelected"
+          @session-change="onSessionChange"
+          @faces-button-click="handleFacesButtonClick"
+          @fetch-planning-centre-people="fetchPlanningCentrePeople"
+          @reload-embeddings="reloadEmbeddingsIndex"
+          @search-input="handleSearchInput"
+          @search-keydown="handleSearchKeydown"
+          @select-person="selectPerson"
+          @selected-person-checkbox-change="handleSelectedPersonCheckboxChange"
+          @household-checkbox-change="handleHouseholdCheckboxChange"
+          @selected-point-person-checkbox-change="handleSelectedPointPersonCheckboxChange"
+          @point-household-checkbox-change="handlePointHouseholdCheckboxChange"
+          @store-embeddings="handleStoreEmbeddings"
+          @open-check-in-overlay="openCheckInOverlay"
+        ></control-side-panel>
       </div>
 
       <!-- Resizer -->
       <div class="resizer" id="resizer" v-show="!sidebarCollapsed && user"></div>
 
-      <!-- Right Pane: Image Display / Sign-in -->
-      <div class="image-pane bg-gray-50 relative">
-        <!-- Sign-in UI -->
-        <div v-if="!user && !loading" class="flex items-center justify-center h-full bg-gray-50">
-          <div class="text-center">
-            <h1 class="text-2xl font-bold text-gray-900 mb-4">eShepherd</h1>
-            <p class="text-gray-600 mb-6">Sign in to view your images</p>
-            <button @click="signIn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-              Sign in with Google
-            </button>
-            <div v-if="error" class="mt-4 text-red-600">{{ error }}</div>
-          </div>
-        </div>
-
-        <!-- Loading UI -->
-        <div v-if="loading" class="flex items-center justify-center h-full bg-gray-50">
-          <div class="text-center">
-            <div class="spinner mx-auto mb-4"></div>
-            <p class="text-gray-600">Loading...</p>
-          </div>
-        </div>
-
-        <!-- Image Display UI -->
-        <div v-if="user && !loading">
-          <div class="w-full border-b border-gray-200 bg-gray-50 px-2 py-1 flex items-center justify-center gap-1">
-            <button
-              :disabled="!hasPrevImage"
-              @click="bannerVisible = true; goPrevImage()"
-              class="inline-flex items-center gap-1 rounded bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 shadow px-1.5 py-0.5 text-[11px]"
-            >
-              <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M12.03 15.53a.75.75 0 0 1-1.06 0l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 1 1 1.06 1.06L8.56 10l3.47 3.47a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd"/></svg>
-              Prev
-            </button>
-            <button
-              :disabled="!hasNextImage"
-              @click="bannerVisible = true; goNextImage()"
-              class="inline-flex items-center gap-1 rounded bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 shadow px-1.5 py-0.5 text-[11px]"
-            >
-              Next
-              <svg class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M7.97 4.47a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1 0 1.06l-4.5 4.5a.75.75 0 1 1-1.06-1.06L11.44 10 7.97 6.53a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"/></svg>
-            </button>
-            <span class="text-xs text-gray-500 ml-2">Use ← → arrow keys<span v-if="selectedBoundingBoxIndex !== null">, Tab for next box, ESC to deselect</span></span>
-          </div>
-          <div class="flex-1 w-full flex flex-col items-center justify-center bg-gray-50 relative" @touchstart="handleTouchStart" @touchend="handleTouchEnd">
-            <div class="flex-1 w-full flex items-center justify-center relative">
-              <image-annotation v-if="selectedImage" :image-src="selectedImage" :annotations="annotations" :selected-file="selectedFile" :show-faces="showFaces" :face-labels="faceLabels" :selected-bounding-box-index="selectedBoundingBoxIndex" :point-labels="pointLabels" :selected-point-label-id="selectedPointLabelId" :point-label-persons="pointLabelPersons" :checked-people-by-point="checkedPeopleByPoint" :get-face-label-key="getFaceLabelKey" :checked-people-by-box="checkedPeopleByBox" :planning-centre-people="planningCentrePeople" :get-household-members="getHouseholdMembers" @update="onUpdateAnnotations" @loading-change="imageLoading = $event" @face-box-click="onFaceBoxClick" @point-label-click="onPointLabelClick" @point-label-create="onPointLabelCreate"></image-annotation>
-              <p v-else class="text-gray-500">Select a session to view images</p>
-            </div>
-            <div v-if="selectedImage && !imageLoading" class="text-xs text-gray-500 mt-2 pb-2">
-              Hold Shift and Left Click on Image to add names without a box
-            </div>
-            <div v-if="selectedImage && currentFolderFiles.length > 0 && !imageLoading" class="absolute top-4 right-4 text-white px-3 py-1.5 rounded text-sm font-medium" style="background-color: rgba(0, 0, 0, 0.5);">
-              {{ currentFileIndex + 1 }}/{{ currentFolderFiles.length }}
-            </div>
-            <div v-if="selectedFile && getImageTimestamp(selectedFile) && !imageLoading" class="absolute top-4 left-4 text-white px-3 py-1.5 rounded text-sm font-medium" style="background-color: rgba(0, 0, 0, 0.5);">
-              {{ getImageTimestamp(selectedFile) }}
-            </div>
-          </div>
-        </div>
-        
-        <!-- Check-In Overlay -->
-        <div
-          v-if="showCheckInOverlay"
-          class="absolute inset-0 z-50 bg-black bg-opacity-40 flex items-center justify-center px-4 py-6"
-        >
-          <div class="bg-white rounded-lg shadow-2xl w-full max-w-5xl h-full max-h-[90vh] flex flex-col">
-            <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-              <div>
-                <h3 class="text-lg font-semibold text-gray-900">Confirm People to Check In</h3>
-                <p class="text-xs text-gray-500">Review selected people before submitting to Planning Center</p>
-              </div>
-              <button
-                @click="closeCheckInOverlay"
-                class="text-gray-500 hover:text-gray-700 text-xl leading-none"
-                aria-label="Close check-in overlay"
-              >
-                &times;
-              </button>
-            </div>
-            
-            <div class="px-4 py-3 flex flex-wrap items-center gap-3 border-b border-gray-100">
-              <div class="text-sm text-gray-700 font-medium">
-                {{ getOverlaySelectedCount() }} / {{ getCheckInTableData().length }} selected
-              </div>
-              <button
-                @click="toggleCheckInSelectAll"
-                :disabled="getCheckInTableData().length === 0"
-                class="text-sm px-3 py-1.5 rounded border transition-colors"
-                :class="getCheckInTableData().length === 0 ? 'text-gray-400 border-gray-200 cursor-not-allowed bg-gray-100' : (areAllCheckInSelected() ? 'text-gray-700 border-gray-300 bg-gray-100 hover:bg-gray-200' : 'text-blue-600 border-blue-500 hover:bg-blue-50')"
-              >
-                {{ areAllCheckInSelected() ? 'Deselect All' : 'Select All' }}
-              </button>
-              <div class="ml-auto flex items-center gap-2">
-                <button
-                  @click="performCheckIn"
-                  :disabled="getOverlaySelectedCount() === 0 || checkInSubmitting"
-                  class="px-4 py-2 rounded-md text-sm font-semibold text-white flex items-center gap-2"
-                  :class="getOverlaySelectedCount() === 0 || checkInSubmitting ? 'bg-green-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'"
-                >
-                  <div v-if="checkInSubmitting" class="spinner-small"></div>
-                  <span>{{ checkInSubmitting ? 'Checking In...' : 'Submit To Planning Center' }}</span>
-                </button>
-              </div>
-            </div>
-            
-            <div class="px-4 py-2">
-              <p v-if="checkInError" class="text-xs text-red-600">{{ checkInError }}</p>
-              <p v-if="checkInSuccessMessage" class="text-xs text-green-600">{{ checkInSuccessMessage }}</p>
-              <p v-if="getCheckInTableData().length === 0" class="text-xs text-gray-500 mt-1">No people available for check-in yet.</p>
-            </div>
-            
-            <div class="flex-1 px-4 pb-4 w-full">
-              <div class="border border-gray-200 rounded-md h-full flex flex-col overflow-hidden bg-white">
-                <div v-if="getCheckInTableData().length === 0" class="flex-1 flex items-center justify-center text-sm text-gray-500">
-                  Add people from the face labelling panel to prepare check-in.
-                </div>
-                <div v-else class="flex-1 overflow-auto">
-                  <table class="min-w-full text-sm">
-                    <thead class="bg-gray-100 text-gray-600 text-xs uppercase sticky top-0 z-10">
-                      <tr>
-                        <th class="text-left px-3 py-2 w-32">Person ID</th>
-                        <th class="text-left px-3 py-2">Person's Name</th>
-                        <th class="text-center px-3 py-2 w-28">Check In</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        v-for="entry in getCheckInTableData()"
-                        :key="entry.person.id"
-                        class="border-b border-gray-100 last:border-b-0"
-                      >
-                        <td class="px-3 py-2 text-xs text-gray-500">{{ entry.person.id }}</td>
-                        <td class="px-3 py-2 text-sm text-gray-800">{{ entry.person.name }}</td>
-                        <td class="px-3 py-2 text-center">
-                          <input
-                            type="checkbox"
-                            :checked="!!checkInOverlaySelection[entry.person.id]"
-                            @change="handleCheckInTableCheckboxChange(entry.person.id, $event)"
-                            class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                          />
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <!-- Right Pane: Image Annotation Panel -->
+      <image-annotation-panel
+        :user="user"
+        :loading="loading"
+        :error="error"
+        :selected-image="selectedImage"
+        :selected-file="selectedFile"
+        :image-loading="imageLoading"
+        :current-folder-files="currentFolderFiles"
+        :current-file-index="currentFileIndex"
+        :has-prev-image="hasPrevImage"
+        :has-next-image="hasNextImage"
+        :selected-bounding-box-index="selectedBoundingBoxIndex"
+        :annotations="annotations"
+        :show-faces="showFaces"
+        :face-labels="faceLabels"
+        :point-labels="pointLabels"
+        :selected-point-label-id="selectedPointLabelId"
+        :point-label-persons="pointLabelPersons"
+        :checked-people-by-point="checkedPeopleByPoint"
+        :checked-people-by-box="checkedPeopleByBox"
+        :planning-centre-people="planningCentrePeople"
+        :get-face-label-key="getFaceLabelKey"
+        :get-household-members="getHouseholdMembers"
+        :get-image-timestamp="getImageTimestamp"
+        @sign-in="signIn"
+        @prev-image="bannerVisible = true; goPrevImage()"
+        @next-image="bannerVisible = true; goNextImage()"
+        @touch-start="handleTouchStart"
+        @touch-end="handleTouchEnd"
+        @update-annotations="onUpdateAnnotations"
+        @loading-change="imageLoading = $event"
+        @face-box-click="onFaceBoxClick"
+        @point-label-click="onPointLabelClick"
+        @point-label-create="onPointLabelCreate"
+      >
+        <!-- Check-In Overlay (inside image-annotation-panel for proper positioning) -->
+        <check-in-overlay
+          :show="showCheckInOverlay"
+          :table-data="getCheckInTableData()"
+          :selection="checkInOverlaySelection"
+          :selected-count="getOverlaySelectedCount()"
+          :total-count="getCheckInTableData().length"
+          :all-selected="areAllCheckInSelected()"
+          :submitting="checkInSubmitting"
+          :error="checkInError"
+          :success-message="checkInSuccessMessage"
+          @close="closeCheckInOverlay"
+          @submit="performCheckIn"
+          @toggle-select-all="toggleCheckInSelectAll"
+          @checkbox-change="handleCheckInTableCheckboxChange"
+        ></check-in-overlay>
+      </image-annotation-panel>
     </div>
   </div>
 
   <script>
-    // Firebase configuration
-    const firebaseConfig = {
-      apiKey: "AIzaSyAd9QCOrxuVFD3I-kmyY4-ZvNRCSibdb8I",
-      authDomain: "charisfriends-54cf3.firebaseapp.com",
-      databaseURL: "https://charisfriends-54cf3.firebaseio.com",
-      projectId: "charisfriends-54cf3",
-      storageBucket: "charisfriends-54cf3.firebasestorage.app",
-      messagingSenderId: "12705856594",
-      appId: "1:12705856594:web:a4bafa9cbaf7423690738b"
-    };
+    // Wait for Utils and Components to be loaded from modules
+    (async function() {
+      // Wait for Utils to be available (loaded by utils-loader.js)
+      while (!window.Utils || Object.keys(window.Utils).length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      
+      // Wait for Components to be available (loaded by components-loader.js)
+      while (!window.Components || Object.keys(window.Components).length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      
+      // Firebase is initialized in utils-loader.js (config/firebase.js)
+      // Access via window.firebaseAuth and window.firebaseDatabase
+      const auth = window.firebaseAuth;
+      const database = window.firebaseDatabase;
 
-    // Initialize Firebase
-    firebase.initializeApp(firebaseConfig);
-    const auth = firebase.auth();
-    const database = firebase.database();
+      // Utils and Services are now loaded from utils-loader.js module
+      const Utils = window.Utils;
+      const Services = window.Services;
 
-    const VueKonva = window['vue-konva'].default;
-    const app = Vue.createApp({
+      const VueKonva = window['vue-konva'].default;
+      const app = Vue.createApp({
           data() {
         return {
           directoryTree: [],
@@ -549,20 +272,18 @@
           }
         },
         async signIn() {
-          try {
-            const provider = new firebase.auth.GoogleAuthProvider();
-            const result = await auth.signInWithPopup(provider);
+          const result = await Services.auth.signIn();
+          if (result.user) {
             this.user = result.user;
             this.error = null;
             await this.fetchDirectoryTree();
-          } catch (error) {
-            console.error('Sign in error:', error);
-            this.error = 'Sign in failed: ' + error.message;
+          } else {
+            this.error = result.error || 'Sign in failed';
           }
         },
         async signOut() {
-          try {
-            await auth.signOut();
+          const result = await Services.auth.signOut();
+          if (!result.error) {
             this.user = null;
             this.directoryTree = [];
             this.selectedImage = null;
@@ -572,8 +293,6 @@
             this.selectedSessionName = '';
             this.currentFolderFiles = [];
             this.currentFileIndex = -1;
-          } catch (error) {
-            console.error('Sign out error:', error);
           }
         },
         toggleSidebar() {
@@ -611,29 +330,15 @@
           
           try {
             this.loading = true;
-            const idToken = await this.user.getIdToken();
-            
-            const response = await fetch('https://eshepherd-auth-and-retrieve-files-g7egpip7ea-as.a.run.app', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${idToken}`,
-                'Content-Type': 'application/json'
-              }
-            });
-
-            if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-            if (data.success) {
-              this.directoryTree = this.transformToTree(data.items);
+            const result = await Services.file.fetchDirectoryTree(this.user);
+            if (result.items) {
+              this.directoryTree = Services.file.transformToTree(result.items);
               // Auto-select the latest session after loading
               this.$nextTick(() => {
                 this.selectLatestSession();
               });
             } else {
-              throw new Error(data.error || 'Failed to fetch data');
+              this.error = result.error || 'Failed to load images';
             }
           } catch (error) {
             console.error('Error fetching directory tree:', error);
@@ -643,10 +348,7 @@
           }
         },
         isUrlExpired(file) {
-          if (!file || !file.expiry_unix) return false;
-          // Compare expiry_unix (seconds) with current time (seconds)
-          const currentTime = Math.floor(Date.now() / 1000);
-          return file.expiry_unix <= currentTime;
+          return Services.file.isUrlExpired(file);
         },
         async fetchPlanningCentrePeople() {
           if (!this.user) {
@@ -656,40 +358,14 @@
           
           try {
             this.peopleRetrievalStatus = 'retrieving';
-            const idToken = await this.user.getIdToken();
+            const result = await Services.planningCenter.fetchPeople(this.user);
             
-            const response = await fetch('https://get-planning-centre-people-g7egpip7ea-as.a.run.app', {
-              method: 'GET',
-              headers: {
-                'Authorization': `Bearer ${idToken}`
-              }
-            });
-            
-            if (!response.ok) {
-              throw new Error(`Failed to fetch planning centre people: ${response.status}`);
+            if (result.error) {
+              throw new Error(result.error);
             }
             
-            const data = await response.json();
-            console.log('Planning centre people response:', data);
-            
-            // Handle different response structures and extract the records array
-            let records = [];
-            if (Array.isArray(data)) {
-              records = data;
-            } else if (data && Array.isArray(data.people)) {
-              records = data.people;
-            } else if (data && Array.isArray(data.data)) {
-              records = data.data;
-            } else if (data && typeof data === 'object') {
-              // If it's an object, try to find any array property
-              const arrayKeys = Object.keys(data).filter(key => Array.isArray(data[key]));
-              if (arrayKeys.length > 0) {
-                records = data[arrayKeys[0]];
-              }
-            }
-            
-            this.planningCentrePeople = records;
-            this.peopleRetrievalCount = records.length;
+            this.planningCentrePeople = result.records;
+            this.peopleRetrievalCount = result.records.length;
             this.peopleRetrievalStatus = 'completed';
             
             // After loading people, try to match faces in current image
@@ -708,27 +384,13 @@
           if (!this.user) return false;
           
           try {
-            const idToken = await this.user.getIdToken();
-            
-            const response = await fetch('https://eshepherd-auth-and-retrieve-files-g7egpip7ea-as.a.run.app', {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${idToken}`,
-                'Content-Type': 'application/json'
-              }
-            });
-
-            if (!response.ok) {
-              throw new Error(`HTTP error! status: ${response.status}`);
-            }
-
-            const data = await response.json();
-            if (data.success) {
-              // Update URLs in the directory tree
-              this.updateUrlsInTree(this.directoryTree, data.items);
+            const result = await Services.file.refreshUrls(this.user);
+            if (result.items) {
+              // Update URLs in the directory tree and currentFolderFiles
+              Services.file.updateUrlsInTree(this.directoryTree, result.items, this.currentFolderFiles);
               return true;
             } else {
-              throw new Error(data.error || 'Failed to refresh URLs');
+              return false;
             }
           } catch (error) {
             console.error('Error refreshing URLs:', error);
@@ -736,134 +398,17 @@
           }
         },
         updateUrlsInTree(tree, items) {
-          // Create a map of item names to their new URLs and expiry info
-          const urlMap = {};
-          items.forEach(item => {
-            urlMap[item.name] = {
-              url: item.url,
-              expiry_timestamp: item.expiry_timestamp,
-              expiry_unix: item.expiry_unix,
-              model_url: item.model_url
-            };
-          });
-          
-          // Recursively update URLs in the tree
-          const updateNode = (node) => {
-              if (node.type === 'file' && urlMap[node.name]) {
-                const newData = urlMap[node.name];
-                node.url = newData.url;
-                node.expiry_timestamp = newData.expiry_timestamp;
-                node.expiry_unix = newData.expiry_unix;
-                node.model_url = newData.model_url;
-                // Clear cached model when URL changes
-                node.model = null;
-              }
-            if (node.children && Array.isArray(node.children)) {
-              node.children.forEach(child => updateNode(child));
-            }
-          };
-          
-          tree.forEach(node => updateNode(node));
-          
-          // Also update currentFolderFiles if they exist
-          if (this.currentFolderFiles && this.currentFolderFiles.length > 0) {
-            this.currentFolderFiles.forEach(file => {
-              if (file.type === 'file' && urlMap[file.name]) {
-                const newData = urlMap[file.name];
-                file.url = newData.url;
-                file.expiry_timestamp = newData.expiry_timestamp;
-                file.expiry_unix = newData.expiry_unix;
-                file.model_url = newData.model_url;
-                // Clear cached model when URL changes
-                file.model = null;
-              }
-            });
-          }
+          Services.file.updateUrlsInTree(tree, items, this.currentFolderFiles);
         },
         async ensureUrlValid(file) {
           if (!file) return null;
-          
-          // Check if URL is expired
-          if (this.isUrlExpired(file)) {
-            console.log('URL expired, refreshing...', file.name);
-            // Refresh URLs from the API
-            const refreshed = await this.refreshUrls();
-            if (refreshed) {
-              // Find the updated file in the tree
-              const updatedFile = this.findFileByName(this.directoryTree, file.name);
-              if (updatedFile) {
-                // Update the file object that was passed in
-                file.url = updatedFile.url;
-                file.expiry_timestamp = updatedFile.expiry_timestamp;
-                file.expiry_unix = updatedFile.expiry_unix;
-                file.model_url = updatedFile.model_url;
-                // Clear cached model when URL changes
-                file.model = null;
-                return updatedFile.url;
-              }
-            }
-            // If refresh failed, return null
-            return null;
-          }
-          
-          return file.url;
+          return await Services.file.ensureUrlValid(file, this.user, this.directoryTree, () => this.refreshUrls());
         },
         findFileByName(nodes, fileName) {
-          for (const node of nodes) {
-            if (node.type === 'file' && node.name === fileName) {
-              return node;
-            }
-            if (node.children && node.children.length > 0) {
-              const found = this.findFileByName(node.children, fileName);
-              if (found) return found;
-            }
-          }
-          return null;
+          return Services.file.findFileByName(nodes, fileName);
         },
         transformToTree(data) {
-          const tree = {};
-          data.forEach(item => {
-            const parts = item.name.split('/');
-            let current = tree;
-            parts.forEach((part, index) => {
-              if (!current[part]) {
-                current[part] = {
-                  name: part,
-                  children: {},
-                  type: index === parts.length - 1 ? item.type : 'directory',
-                  url: item.url,
-                  expiry_timestamp: item.expiry_timestamp,
-                  expiry_unix: item.expiry_unix,
-                  model_url: item.model_url,
-                  model: null // Will be fetched from model_url when needed
-                };
-              }
-              current = current[part].children;
-            });
-          });
-          const convertToArray = (node, isRootLevel = false) => {
-            const children = Object.values(node).map(child => {
-              return {
-                ...child,
-                children: convertToArray(child.children)
-              };
-            });
-            
-            // Sort directories first, then files
-            return children.sort((a, b) => {
-              if (a.type === 'directory' && b.type === 'file') return -1;
-              if (a.type === 'file' && b.type === 'directory') return 1;
-              
-              // For directories, sort by name in descending order (latest first)
-              if (a.type === 'directory' && b.type === 'directory') {
-                return b.name.localeCompare(a.name);
-              }
-              
-              // For files, sort alphabetically
-              return a.name.localeCompare(b.name);
-            });
-          };
-          return convertToArray(tree, true);
+          return Services.file.transformToTree(data);
         },
         onSessionChange() {
           if (!this.selectedSessionName) return;
@@ -935,15 +480,7 @@
           }
         },
         getAllFilesFromNode(node) {
-          const files = [];
-          if (node.type === 'file') {
-            files.push(node);
-          } else if (node.children && node.children.length > 0) {
-            node.children.forEach(child => {
-              files.push(...this.getAllFilesFromNode(child));
-            });
-          }
-          return files;
+          return Services.file.getAllFilesFromNode(node);
         },
         getImageTimestamp(file) {
           if (!file || !file.name) return null;
@@ -1017,58 +554,7 @@
         // Decode base64 embedding to Float32Array (numpy float32 array equivalent)
         // Python encoding: np.array(embedding, dtype=np.float32).tobytes() -> base64.b64encode().decode('utf-8')
         decodeEmbeddingFromBase64(base64String) {
-          if (!base64String || typeof base64String !== 'string') {
-            return null;
-          }
-          
-          try {
-            // Decode base64 to get the binary bytes (same as Python base64.b64decode)
-            const binaryString = atob(base64String);
-            
-            // Convert binary string to Uint8Array
-            // This represents the raw bytes from numpy array.tobytes()
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-            
-            // Check if length is valid for Float32Array (must be multiple of 4 bytes)
-            // Each float32 is 4 bytes
-            if (bytes.length % 4 !== 0) {
-              console.error('Invalid embedding length:', bytes.length, 'must be multiple of 4 bytes for Float32Array');
-              return null;
-            }
-            
-            if (bytes.length === 0) {
-              console.error('Empty embedding data');
-              return null;
-            }
-            
-            // Convert bytes to Float32Array
-            // Float32Array automatically handles byte order (little-endian by default, same as numpy)
-            // This recreates the numpy float32 array from the binary bytes
-            const float32Array = new Float32Array(bytes.buffer);
-            
-            // Convert to regular JavaScript array for compatibility with vector search library
-            const result = Array.from(float32Array);
-            
-            // Validate the result
-            if (result.length === 0) {
-              console.error('Decoded embedding array is empty');
-              return null;
-            }
-            
-            // Verify all values are valid numbers (should be float32 values)
-            if (!result.every(v => typeof v === 'number' && !isNaN(v) && isFinite(v))) {
-              console.error('Decoded embedding contains invalid numbers');
-              return null;
-            }
-            
-            return result;
-          } catch (error) {
-            console.error('Error decoding base64 embedding to Float32Array:', error.message, 'base64 preview:', base64String.substring(0, 50));
-            return null;
-          }
+          return Utils.decodeEmbeddingFromBase64(base64String);
         },
         // Reload embeddings index from Firebase
         async reloadEmbeddingsIndex() {
@@ -1101,46 +587,11 @@
               this.ClientVectorSearchModule = await import('https://esm.run/client-vector-search');
             }
             
-            const { EmbeddingIndex } = this.ClientVectorSearchModule;
-            
-            if (!EmbeddingIndex) {
-              console.error('EmbeddingIndex not found in client-vector-search module');
-              return;
-            }
-            
-            const embeddingsRef = database.ref('eshepherd/embeddings');
-            const snapshot = await embeddingsRef.once('value');
-            const allEmbeddings = snapshot.val();
-            
-            if (!allEmbeddings) {
-              // Create empty index
-              this.embeddingIndex = new EmbeddingIndex([]);
-              return;
-            }
-            
-            // Process all embeddings: {personId: {index: base64String}}
-            const indexObjects = [];
-            for (const personId in allEmbeddings) {
-              const personEmbeddings = allEmbeddings[personId];
-              
-              for (const index in personEmbeddings) {
-                const base64Embedding = personEmbeddings[index];
-                const embeddingArray = this.decodeEmbeddingFromBase64(base64Embedding);
-                
-                if (embeddingArray && Array.isArray(embeddingArray)) {
-                  indexObjects.push({
-                    id: `${personId}_${index}`,
-                    personId: personId,
-                    embedding: embeddingArray
-                  });
-                }
-              }
-            }
-            
-            // Create EmbeddingIndex
-            this.embeddingIndex = new EmbeddingIndex(indexObjects);
-            
-            console.log(`Loaded all stored embeddings: ${indexObjects.length} embeddings from ${Object.keys(allEmbeddings).length} people`);
+            this.embeddingIndex = await Services.embedding.loadAllStoredEmbeddings(
+              this.ClientVectorSearchModule,
+              forceReload,
+              this.embeddingIndex
+            );
           } catch (error) {
             console.error('Error loading all stored embeddings:', error);
             this.embeddingIndex = null;
@@ -1780,6 +1231,10 @@
             });
           }
         },
+        handleSearchInput(value) {
+          this.searchQuery = value;
+          this.performSearch();
+        },
         performSearch() {
           // Clear face guesses when user starts typing
           this.faceGuesses = [];
@@ -1805,75 +1260,16 @@
           });
         },
         getHouseholdMembers(person) {
-          if (!person || !person.household_ids || !Array.isArray(person.household_ids) || person.household_ids.length === 0) {
-            return [];
-          }
-          
-          // Find all people who share the same household_ids
-          const householdMembers = this.planningCentrePeople.filter(p => {
-            if (!p.household_ids || !Array.isArray(p.household_ids)) return false;
-            // Check if they share any household_ids
-            return p.id !== person.id && p.household_ids.some(hid => person.household_ids.includes(hid));
-          });
-          
-          return householdMembers;
+          return Utils.getHouseholdMembers(person, this.planningCentrePeople);
         },
         getHouseholdGroups(person) {
-          if (!person || !person.household_ids || !Array.isArray(person.household_ids) || person.household_ids.length === 0) {
-            return [];
-          }
-          
-          // Group people by each household_id
-          const groups = person.household_ids.map(householdId => {
-            // Find all people who share this specific household_id, excluding the selected person
-            const members = this.planningCentrePeople.filter(p => {
-              if (!p.household_ids || !Array.isArray(p.household_ids)) return false;
-              // Exclude the selected person from household members
-              return p.id !== person.id && p.household_ids.includes(householdId);
-            });
-            
-            return {
-              householdId: householdId,
-              members: members
-            };
-          });
-          
-          return groups;
+          return Utils.getHouseholdGroups(person, this.planningCentrePeople);
         },
         getHouseholdMembersDisplay(person) {
-          const members = this.getHouseholdMembers(person);
-          if (members.length === 0) return '';
-          
-          // Get names of household members
-          const names = members.map(m => m.name).filter(name => name);
-          
-          // Truncate if too long (roughly estimate based on character count)
-          const maxLength = 50; // Approximate max characters to fit in dropdown
-          let display = names.join(', ');
-          
-          if (display.length > maxLength) {
-            // Truncate and add ellipsis
-            let truncated = '';
-            for (let i = 0; i < names.length; i++) {
-              const name = names[i];
-              const separator = truncated ? ', ' : '';
-              if ((truncated + separator + name).length > maxLength - 3) {
-                // Leave room for '...'
-                truncated += '...';
-                break;
-              }
-              truncated += separator + name;
-            }
-            display = truncated;
-          }
-          
-          return display;
+          return Utils.getHouseholdMembersDisplay(person, this.planningCentrePeople);
         },
         getPersonById(personId) {
-          if (!personId || !this.planningCentrePeople || this.planningCentrePeople.length === 0) {
-            return null;
-          }
-          return this.planningCentrePeople.find(person => person.id === personId) || null;
+          return Utils.getPersonById(personId, this.planningCentrePeople);
         },
         getCheckInTableData() {
           const entries = [];
@@ -1961,105 +1357,27 @@
         // Get session validity time range in UTC
         // sessionName is assumed to be a date in SGT format (e.g., "2025-11-30")
         getSessionValidityRange(sessionName) {
-          if (!sessionName) {
-            return null;
-          }
-          
-          // Parse session date (e.g., "2025-11-30") - this is in SGT
-          const sessionDateMatch = sessionName.match(/^(\d{4})-(\d{2})-(\d{2})/);
-          if (!sessionDateMatch) {
-            return null;
-          }
-          
-          const [, year, month, day] = sessionDateMatch;
-          
-          // Session date is in SGT, so we need to:
-          // 1. Create a date for the day after session date at 10am SGT
-          // 2. Convert 10am SGT to UTC (SGT is UTC+8, so 10am SGT = 2am UTC)
-          const sessionYear = parseInt(year);
-          const sessionMonth = parseInt(month) - 1; // JavaScript months are 0-indexed
-          const sessionDay = parseInt(day);
-          
-          // Create date for next day at 10am SGT, then convert to UTC
-          // 10am SGT = 2am UTC on the same calendar date
-          const validStartUtc = new Date(Date.UTC(sessionYear, sessionMonth, sessionDay + 1, 2, 0, 0, 0));
-          
-          // Valid until: 7 days later at the same time (2am UTC = 10am SGT)
-          const validEndUtc = new Date(validStartUtc);
-          validEndUtc.setUTCDate(validEndUtc.getUTCDate() + 7);
-          
-          return {
-            startUtc: validStartUtc,
-            endUtc: validEndUtc
-          };
+          return Utils.getSessionValidityRange(sessionName);
         },
         // Check if current time is within valid session period
         isSessionValid() {
-          if (!this.selectedSessionName) {
-            return false;
-          }
-          
-          const range = this.getSessionValidityRange(this.selectedSessionName);
-          if (!range) {
-            return false;
-          }
-          
-          const nowUtc = new Date();
-          return nowUtc >= range.startUtc && nowUtc < range.endUtc;
+          return Utils.isSessionValid(this.selectedSessionName);
         },
         // Format UTC date for display in user's local timezone (without timezone suffix)
         formatLocalDateTimeNoTz(utcDate) {
-          if (!utcDate) return '';
-          // utcDate is a Date object in UTC, JavaScript will automatically convert to local timezone
-          const localDate = new Date(utcDate);
-          const year = localDate.getFullYear();
-          const month = String(localDate.getMonth() + 1).padStart(2, '0');
-          const day = String(localDate.getDate()).padStart(2, '0');
-          const hours = String(localDate.getHours()).padStart(2, '0');
-          const minutes = String(localDate.getMinutes()).padStart(2, '0');
-          return `${year}-${month}-${day} ${hours}:${minutes}`;
+          return Utils.formatLocalDateTimeNoTz(utcDate);
         },
         // Get timezone abbreviation for display
         getLocalTimeZoneName() {
-          const now = new Date();
-          const timeZoneName = now.toLocaleTimeString('en-US', { timeZoneName: 'short' }).split(' ').pop();
-          return timeZoneName;
+          return Utils.getLocalTimeZoneName();
         },
         // Get formatted valid time range string in user's local timezone
         getSessionValidTimeRangeString() {
-          if (!this.selectedSessionName) {
-            return '';
-          }
-          
-          const range = this.getSessionValidityRange(this.selectedSessionName);
-          if (!range) {
-            return '';
-          }
-          
-          const startStr = this.formatLocalDateTimeNoTz(range.startUtc);
-          const endStr = this.formatLocalDateTimeNoTz(range.endUtc);
-          const timeZoneName = this.getLocalTimeZoneName();
-          return `${startStr} to ${endStr} (${timeZoneName})`;
+          return Utils.getSessionValidTimeRangeString(this.selectedSessionName);
         },
         // Get session invalid message based on whether it's past or not started
         getSessionInvalidMessage() {
-          if (!this.selectedSessionName) {
-            return 'Session has not yet started.';
-          }
-          
-          const range = this.getSessionValidityRange(this.selectedSessionName);
-          if (!range) {
-            return 'Session has not yet started.';
-          }
-          
-          const nowUtc = new Date();
-          if (nowUtc < range.startUtc) {
-            return 'Session has not yet started.';
-          } else if (nowUtc >= range.endUtc) {
-            return 'Session has Past Valid Checkin Period.';
-          }
-          
-          return 'Session is Invalid as it is outside the valid Checkin Period.';
+          return Utils.getSessionInvalidMessage(this.selectedSessionName);
         },
         getOverlaySelectedPersonIds() {
           const snapshotIds = this.checkInOverlaySnapshot || [];
@@ -2088,76 +1406,43 @@
             this.checkInError = null;
             this.checkInSuccessMessage = '';
             
-            const idToken = await this.user.getIdToken();
-            const payload = {
-              person_ids: personIds,
-              email: this.user.email,
-              uid: this.user.uid
-            };
+            const result = await Services.planningCenter.performCheckIn(this.user, personIds);
             
-            let response;
-            try {
-              response = await fetch('https://check-in-to-planning-center-g7egpip7ea-as.a.run.app', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${idToken}`
-                },
-                body: JSON.stringify(payload)
-              });
-            } catch (fetchError) {
-              // Handle network errors (connection lost, timeout, etc.)
-              if (fetchError.name === 'TypeError' && (fetchError.message.includes('Failed to fetch') || fetchError.message.includes('Load failed') || fetchError.message.includes('network'))) {
-                throw new Error('Network connection failed. Please check your internet connection and try again.');
-              }
-              throw fetchError;
-            }
-            
-            if (!response.ok) {
-              const errorText = await response.text().catch(() => '');
-              throw new Error(errorText || `Check-in failed with status ${response.status}`);
-            }
-            
-            const result = await response.json().catch(() => ({}));
-            this.checkInSuccessMessage = result.message || 'Check-in request submitted successfully.';
-            
-            if (result && typeof result === 'object') {
-              const {
-                success,
-                total_persons_received,
-                already_checked_in,
-                people_to_update
-              } = result;
+            if (result.success) {
+              this.checkInSuccessMessage = result.data?.message || 'Check-in request submitted successfully.';
               
-              const lines = [];
-              if (typeof success !== 'undefined') {
-                lines.push(`Success: ${success ? 'Yes' : 'No'}`);
+              if (result.data && typeof result.data === 'object') {
+                const {
+                  success,
+                  total_persons_received,
+                  already_checked_in,
+                  people_to_update
+                } = result.data;
+                
+                const lines = [];
+                if (typeof success !== 'undefined') {
+                  lines.push(`Success: ${success ? 'Yes' : 'No'}`);
+                }
+                if (typeof total_persons_received !== 'undefined') {
+                  lines.push(`Total persons received: ${total_persons_received}`);
+                }
+                if (typeof already_checked_in !== 'undefined') {
+                  lines.push(`Already checked in: ${already_checked_in}`);
+                }
+                if (typeof people_to_update !== 'undefined') {
+                  lines.push(`People to update: ${people_to_update}`);
+                }
+                
+                if (lines.length > 0) {
+                  alert(lines.join('\n'));
+                }
               }
-              if (typeof total_persons_received !== 'undefined') {
-                lines.push(`Total persons received: ${total_persons_received}`);
-              }
-              if (typeof already_checked_in !== 'undefined') {
-                lines.push(`Already checked in: ${already_checked_in}`);
-              }
-              if (typeof people_to_update !== 'undefined') {
-                lines.push(`People to update: ${people_to_update}`);
-              }
-              
-              if (lines.length > 0) {
-                alert(lines.join('\n'));
-              }
+            } else {
+              this.checkInError = result.error || 'Failed to perform check-in.';
             }
           } catch (error) {
             console.error('Error performing check-in:', error);
-            
-            // Provide more specific error messages for network failures
-            if (error.name === 'TypeError' && (error.message.includes('Failed to fetch') || error.message.includes('Load failed') || error.message.includes('network'))) {
-              this.checkInError = 'Network connection failed. Please check your internet connection and try again.';
-            } else if (error.message) {
-              this.checkInError = error.message;
-            } else {
-              this.checkInError = 'Failed to perform check-in. Please check your internet connection and try again.';
-            }
+            this.checkInError = error.message || 'Failed to perform check-in. Please check your internet connection and try again.';
           } finally {
             this.checkInSubmitting = false;
           }
@@ -2536,12 +1821,9 @@
             return this.embeddingsCountCache[currentLabel.id];
           }
           
-          // Fetch from Firebase
+          // Fetch from service
           try {
-            const embeddingsRef = database.ref(`eshepherd/embeddings/${currentLabel.id}`);
-            const snapshot = await embeddingsRef.once('value');
-            const embeddings = snapshot.val();
-            const count = embeddings ? Object.keys(embeddings).length : 0;
+            const count = await Services.embedding.getEmbeddingsCount(currentLabel.id);
             this.embeddingsCountCache[currentLabel.id] = count;
             // Force update to refresh UI
             this.$forceUpdate();
@@ -2618,29 +1900,13 @@
           }
           
           try {
-            const embeddingsRef = database.ref(`eshepherd/embeddings/${currentLabel.id}`);
-            const snapshot = await embeddingsRef.once('value');
-            const embeddings = snapshot.val();
+            const result = await Services.embedding.checkEmbeddingInDB(currentLabel.id, this.currentEmbeddingData);
             
             // Update count cache
-            const count = embeddings ? Object.keys(embeddings).length : 0;
-            this.embeddingsCountCache[currentLabel.id] = count;
-            
-            if (!embeddings || count === 0) {
-              // No embeddings in DB, mark as not stored
-              this.embeddingsStored[key] = false;
-              this.checkingEmbeddingInDB = false;
-              this.$forceUpdate();
-              return;
-            }
-            
-            // currentEmbeddingData is already a base64 string, use it directly
-            // Check if current embedding exists in DB
-            const embeddingValues = Object.values(embeddings);
-            const exists = embeddingValues.some(storedEmbedding => storedEmbedding === this.currentEmbeddingData);
+            this.embeddingsCountCache[currentLabel.id] = result.count;
             
             // Update stored state
-            this.embeddingsStored[key] = exists;
+            this.embeddingsStored[key] = result.exists;
             this.checkingEmbeddingInDB = false;
             this.$forceUpdate();
           } catch (error) {
@@ -2652,17 +1918,7 @@
           }
         },
         encodeEmbeddingToBase64(embedding) {
-          // Convert embedding array to base64 string
-          if (Array.isArray(embedding)) {
-            // Convert array to JSON string, then to base64
-            const jsonString = JSON.stringify(embedding);
-            return btoa(jsonString);
-          } else if (typeof embedding === 'string') {
-            // Already a string, encode to base64
-            return btoa(embedding);
-          }
-          // If it's already base64 or other format, return as is
-          return embedding;
+          return Utils.encodeEmbeddingToBase64(embedding);
         },
         async handleStoreEmbeddings() {
           const currentLabel = this.getCurrentFaceLabel();
@@ -2671,35 +1927,26 @@
           }
           
           try {
-            // currentEmbeddingData is already a base64 string, store it directly
-            // Get reference to embeddings for this person
-            const embeddingsRef = database.ref(`eshepherd/embeddings/${currentLabel.id}`);
+            const result = await Services.embedding.storeEmbedding(currentLabel.id, this.currentEmbeddingData);
             
-            // Get current embeddings to find next index
-            const snapshot = await embeddingsRef.once('value');
-            const embeddings = snapshot.val() || {};
-            
-            // Find next available index
-            const existingIndices = Object.keys(embeddings).map(k => parseInt(k)).filter(n => !isNaN(n));
-            const nextIndex = existingIndices.length > 0 ? Math.max(...existingIndices) + 1 : 0;
-            
-            // Store the embedding (already base64)
-            await database.ref(`eshepherd/embeddings/${currentLabel.id}/${nextIndex}`).set(this.currentEmbeddingData);
-            
-            // Update stored state
-            const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-            if (facialArea) {
-              const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
-              if (key) {
-                this.embeddingsStored[key] = true;
+            if (result.success) {
+              // Update stored state
+              const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
+              if (facialArea) {
+                const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
+                if (key) {
+                  this.embeddingsStored[key] = true;
+                }
               }
+              
+              // Update count cache
+              this.embeddingsCountCache[currentLabel.id] = result.count;
+              
+              // Force update to refresh UI
+              this.$forceUpdate();
+            } else {
+              alert('Failed to store embedding: ' + (result.error || 'Unknown error'));
             }
-            
-            // Update count cache
-            this.embeddingsCountCache[currentLabel.id] = Object.keys(embeddings).length + 1;
-            
-            // Force update to refresh UI
-            this.$forceUpdate();
           } catch (error) {
             console.error('Error storing embedding:', error);
             alert('Failed to store embedding: ' + error.message);
@@ -3059,7 +2306,7 @@
         });
         
         // Listen for authentication state changes
-        auth.onAuthStateChanged((user) => {
+        Services.auth.onAuthStateChanged((user) => {
           this.user = user;
           this.loading = false;
           if (user) {
@@ -4020,63 +3267,18 @@
       }
     });
 
-    app.use(VueKonva);
-    const vueApp = app.mount('#app');
+      // Register new components
+      app.component('control-side-panel', window.Components.ControlSidePanel);
+      app.component('image-annotation-panel', window.Components.ImageAnnotationPanel);
+      app.component('check-in-overlay', window.Components.CheckInOverlay);
+      
+      app.use(VueKonva);
+      const vueApp = app.mount('#app');
 
-    // Setup resizer functionality after Vue app is mounted
-    function setupResizer() {
-      const resizer = document.getElementById('resizer');
-      const directoryPane = document.getElementById('directoryPane');
-      const mainContent = document.querySelector('.main-content');
-
-      // Check if elements exist before adding event listeners
-      if (!resizer || !directoryPane || !mainContent) {
-        console.log('Some DOM elements not found, skipping resizer setup');
-        return;
-      }
-
-      let isResizing = false;
-      let startX = 0;
-      let startWidth = 0;
-
-      resizer.addEventListener('mousedown', (e) => {
-        isResizing = true;
-        startX = e.clientX;
-        startWidth = directoryPane.offsetWidth;
-        document.body.style.cursor = 'ew-resize';
-        document.body.style.userSelect = 'none';
-        e.preventDefault();
-      });
-
-      document.addEventListener('mousemove', (e) => {
-        if (!isResizing) return;
-
-        const deltaX = e.clientX - startX;
-        const newWidth = startWidth + deltaX;
-        const minWidth = 200;
-        const maxWidth = mainContent.offsetWidth * 0.7; // Max 70% of content width
-
-        if (newWidth >= minWidth && newWidth <= maxWidth) {
-          directoryPane.style.width = `${newWidth}px`;
-        }
-      });
-
-      document.addEventListener('mouseup', () => {
-        if (isResizing) {
-          isResizing = false;
-          document.body.style.cursor = 'default';
-          document.body.style.userSelect = '';
-        }
-      });
-
-      // Prevent text selection during resize
-      resizer.addEventListener('selectstart', (e) => {
-        e.preventDefault();
-      });
-    }
-
-    // Setup resizer after Vue app is mounted with a delay to ensure DOM is ready
-    setTimeout(setupResizer, 100);
+      // Setup resizer functionality after Vue app is mounted
+      // Setup resizer after Vue app is mounted with a delay to ensure DOM is ready
+      setTimeout(Utils.setupResizer, 100);
+    })().catch(console.error);
   </script>
 </body>
 </html>

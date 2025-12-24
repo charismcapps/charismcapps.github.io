@@ -130,7 +130,7 @@ export const fileService = {
   /**
    * Update URLs in tree structure
    */
-  updateUrlsInTree(tree, items) {
+  updateUrlsInTree(tree, items, currentFolderFiles = null) {
     // Create a map of item names to their new URLs and expiry info
     const urlMap = {};
     items.forEach(item => {
@@ -159,6 +159,22 @@ export const fileService = {
     };
     
     tree.forEach(node => updateNode(node));
+    
+    // Also update currentFolderFiles if provided
+    if (currentFolderFiles && currentFolderFiles.length > 0) {
+      currentFolderFiles.forEach(file => {
+        if (file.type === 'file' && urlMap[file.name]) {
+          const newData = urlMap[file.name];
+          file.url = newData.url;
+          file.expiry_timestamp = newData.expiry_timestamp;
+          file.expiry_unix = newData.expiry_unix;
+          file.model_url = newData.model_url;
+          // Clear cached model when URL changes
+          file.model = null;
+        }
+      });
+    }
+    
     return tree;
   },
 
@@ -166,16 +182,19 @@ export const fileService = {
    * Find file by name in tree
    */
   findFileByName(nodes, fileName) {
-    for (const node of nodes) {
-      if (node.type === 'file' && node.name === fileName) {
-        return node;
+    const search = (nodeList) => {
+      for (const node of nodeList) {
+        if (node.type === 'file' && node.name === fileName) {
+          return node;
+        }
+        if (node.children && node.children.length > 0) {
+          const found = search(node.children);
+          if (found) return found;
+        }
       }
-      if (node.children && node.children.length > 0) {
-        const found = this.findFileByName(node.children, fileName);
-        if (found) return found;
-      }
-    }
-    return null;
+      return null;
+    };
+    return search(nodes);
   },
 
   /**
@@ -183,13 +202,16 @@ export const fileService = {
    */
   getAllFilesFromNode(node) {
     const files = [];
-    if (node.type === 'file') {
-      files.push(node);
-    } else if (node.children && node.children.length > 0) {
-      node.children.forEach(child => {
-        files.push(...this.getAllFilesFromNode(child));
-      });
-    }
+    const collect = (n) => {
+      if (n.type === 'file') {
+        files.push(n);
+      } else if (n.children && n.children.length > 0) {
+        n.children.forEach(child => {
+          collect(child);
+        });
+      }
+    };
+    collect(node);
     return files;
   },
 
@@ -200,13 +222,13 @@ export const fileService = {
     if (!file) return null;
     
     // Check if URL is expired
-    if (this.isUrlExpired(file)) {
+    if (fileService.isUrlExpired(file)) {
       console.log('URL expired, refreshing...', file.name);
       // Refresh URLs from the API
       const result = await refreshUrlsCallback();
       if (result && result.items) {
         // Find the updated file in the tree
-        const updatedFile = this.findFileByName(directoryTree, file.name);
+        const updatedFile = fileService.findFileByName(directoryTree, file.name);
         if (updatedFile) {
           // Update the file object that was passed in
           file.url = updatedFile.url;
