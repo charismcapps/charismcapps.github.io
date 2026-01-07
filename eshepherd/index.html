@@ -56,8 +56,7 @@
           :selected-file="selectedFile"
           :people-retrieval-status="peopleRetrievalStatus"
           :people-retrieval-count="peopleRetrievalCount"
-          :selected-bounding-box-index="selectedBoundingBoxIndex"
-          :selected-overlap-box="selectedOverlapBox"
+          :selected-key-box="selectedKeyBox"
           :selected-point-label-id="selectedPointLabelId"
           :labelling-started="labellingStarted"
           :search-query="searchQuery"
@@ -117,13 +116,14 @@
         :current-file-index="currentFileIndex"
         :has-prev-image="hasPrevImage"
         :has-next-image="hasNextImage"
-        :selected-bounding-box-index="selectedBoundingBoxIndex" 
+        :selected-bounding-box-index="selectedBoundingBoxIndex"
         :selected-overlap-box="selectedOverlapBox"
         :annotations="annotations"
         :show-faces="showFaces"
         :face-labels="faceLabels"
         :point-labels="pointLabels"
         :selected-point-label-id="selectedPointLabelId"
+        :selected-key-box="selectedKeyBox"
         :point-label-persons="pointLabelPersons"
         :checked-people-by-point="checkedPeopleByPoint"
           :checked-people-by-box="checkedPeopleByBox"
@@ -138,10 +138,8 @@
         @banner-visibility-change="handleBannerVisibilityChange"
         @update-annotations="annotations = $event"
         @loading-change="imageLoading = $event"
-        @face-box-click="onFaceBoxClick"
-        @overlap-face-box-click="onOverlapFaceBoxClick"
-        @overlap-box-deselected="onOverlapBoxDeselected"
-        @face-box-deselected="onFaceBoxDeselected"
+        @cluster-box-click="onClusterBoxClick"
+        @cluster-box-deselected="onClusterBoxDeselected"
         @point-label-click="onPointLabelClick"
         @point-label-create="onPointLabelCreate"
       >
@@ -247,7 +245,7 @@
           checkInSuccessMessage: '', // Store success message after check-in
           checkInOverlaySnapshot: [], // Person IDs captured when opening overlay
           checkInOverlaySelection: {}, // Overlay-specific checkbox states
-          selectedOverlapBox: null // Track selected overlap box (for setting person without switching images)
+          selectedKeyBox: null // Unified selection: tracks selected cluster's key box { clusterId, sourceFile, embeddingIndex, facialArea, sourceImage, isKeyBoxFromCurrentImage }
         };
       },
       methods: {
@@ -772,9 +770,9 @@
             });
           }
         },
-        async onOverlapFaceBoxClick(eventData) {
-          // Stay on current image but allow setting person for overlap box
-          const { sourceFile, embeddingIndex, facialArea } = eventData;
+        async onClusterBoxClick(keyBoxData) {
+          // Unified handler for cluster key box selection
+          const { clusterId, sourceFile, embeddingIndex, facialArea, sourceImage, isKeyBoxFromCurrentImage } = keyBoxData;
           
           if (!sourceFile) return;
           
@@ -788,31 +786,32 @@
             await new Promise(resolve => setTimeout(resolve, 500));
           }
           
-          // Clear current image box selection - don't set selectedBoundingBoxIndex
-          // because that would select a box from the current image
-          this.selectedBoundingBoxIndex = null;
+          // Clear point label selection when selecting a cluster box
           this.selectedPointLabelId = null;
           this.searchQuery = '';
           this.searchResults = [];
           this.selectedSearchIndex = -1;
           this.faceGuesses = [];
           
-          // Store overlap box info for selectPerson to use
-          this.selectedOverlapBox = {
-            sourceFile: sourceFile,
-            embeddingIndex: embeddingIndex,
-            facialArea: facialArea
+          // Store unified key box selection
+          this.selectedKeyBox = {
+            clusterId,
+            sourceFile,
+            embeddingIndex,
+            facialArea,
+            sourceImage,
+            isKeyBoxFromCurrentImage
           };
           
           // Initialize checkboxes if there's already a label
-          const currentLabel = this.getCurrentFaceLabelForOverlap();
+          const currentLabel = this.getCurrentFaceLabel();
           if (currentLabel) {
             // Check global list for selected person's checked state
             this.selectedPersonChecked = this.isPersonChecked(currentLabel.id);
             this.initializeHouseholdCheckboxes(currentLabel);
             
             // Reset stored state first
-            const resetKey = this.getFaceLabelKey(sourceFile.name, facialArea);
+            const resetKey = this.getFaceLabelKey(sourceImage, facialArea);
             if (resetKey) {
               this.embeddingsStored[resetKey] = false;
             }
@@ -822,13 +821,17 @@
             this.$forceUpdate();
             
             // Load embedding data and check if it exists in DB
-            // Temporarily switch to overlap file for loading embedding data
+            // Temporarily switch to key box file for loading embedding data if needed
             const originalFile = this.selectedFile;
-            this.selectedFile = sourceFile;
+            if (!isKeyBoxFromCurrentImage) {
+              this.selectedFile = sourceFile;
+            }
             this.loadEmbeddingData();
             this.getEmbeddingsCount(); // Load count (async, but don't wait)
             this.checkEmbeddingInDB(); // Check DB (async, but don't wait)
-            this.selectedFile = originalFile; // Restore original file
+            if (!isKeyBoxFromCurrentImage) {
+              this.selectedFile = originalFile; // Restore original file
+            }
           } else {
             // No label yet, default to checked
             this.selectedPersonChecked = true;
@@ -837,87 +840,28 @@
             
             // Face guesses will be loaded by ControlSidePanel component
           }
-        },
-        onOverlapBoxDeselected() {
-          // Clear overlap box selection when it's filtered out
-          this.selectedOverlapBox = null;
-          this.selectedBoundingBoxIndex = null;
-          this.searchQuery = '';
-          this.searchResults = [];
-          this.selectedSearchIndex = -1;
-          this.faceGuesses = [];
-          this.selectedPersonChecked = true;
-          this.householdCheckboxes = {};
-        },
-        onFaceBoxDeselected() {
-          // Clear current image box selection when it's filtered out
-          this.selectedBoundingBoxIndex = null;
-          this.selectedOverlapBox = null;
-          this.searchQuery = '';
-          this.searchResults = [];
-          this.selectedSearchIndex = -1;
-          this.faceGuesses = [];
-          this.selectedPersonChecked = true;
-          this.householdCheckboxes = {};
-        },
-        onFaceBoxClick(embeddingIndex) {
-          // Toggle selection - if clicking the same box, deselect it
-          if (this.selectedBoundingBoxIndex === embeddingIndex) {
-            this.selectedBoundingBoxIndex = null;
-            this.searchQuery = '';
-            this.searchResults = [];
-            this.selectedSearchIndex = -1;
-            this.faceGuesses = [];
-            this.selectedPersonChecked = true;
-            this.householdCheckboxes = {};
-            this.selectedOverlapBox = null; // Clear overlap box selection
-          } else {
-            this.selectedOverlapBox = null; // Clear overlap box selection when clicking a regular box
-            this.selectedBoundingBoxIndex = embeddingIndex;
-            // Clear point label selection when selecting a bounding box
-            this.selectedPointLabelId = null;
-            this.searchQuery = '';
-            this.searchResults = [];
-            this.selectedSearchIndex = -1;
-            this.faceGuesses = []; // Clear previous guesses
-            // Initialize checkboxes from global list if there's already a label
-            const currentLabel = this.getCurrentFaceLabel();
-            if (currentLabel) {
-              // Check global list for selected person's checked state
-              this.selectedPersonChecked = this.isPersonChecked(currentLabel.id);
-              this.initializeHouseholdCheckboxes(currentLabel);
-              
-              // Reset stored state first
-              const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-              if (facialArea) {
-                const resetKey = this.getFaceLabelKey(this.selectedFile.name, facialArea);
-                if (resetKey) {
-                  this.embeddingsStored[resetKey] = false;
-                }
-              }
-              
-              // Set loading state
-              this.checkingEmbeddingInDB = true;
-              this.$forceUpdate();
-              
-              // Load embedding data and check if it exists in DB
-              this.loadEmbeddingData();
-              this.getEmbeddingsCount(); // Load count (async, but don't wait)
-              this.checkEmbeddingInDB(); // Check DB (async, but don't wait)
-            } else {
-              // No label yet, default to checked
-              this.selectedPersonChecked = true;
-              this.householdCheckboxes = {};
-              this.currentEmbeddingData = null;
-              
-              // Face guesses will be loaded by ControlSidePanel component
+          
+          // Focus the search input
+          this.$nextTick(() => {
+            if (this.$refs.searchInput) {
+              this.$refs.searchInput.focus();
             }
-            // Focus the search input
-            this.$nextTick(() => {
-              if (this.$refs.searchInput) {
-                this.$refs.searchInput.focus();
-              }
-            });
+          });
+        },
+        onClusterBoxDeselected() {
+          // Clear unified key box selection
+          // Set to null - watch handler in ImageAnnotationCanvas will detect this and stop blinking
+          const wasSelected = this.selectedKeyBox !== null;
+          this.selectedKeyBox = null;
+          this.searchQuery = '';
+          this.searchResults = [];
+          this.selectedSearchIndex = -1;
+          this.faceGuesses = [];
+          this.selectedPersonChecked = true;
+          this.householdCheckboxes = {};
+          // Force Vue to detect the change if needed
+          if (wasSelected) {
+            this.$forceUpdate();
           }
         },
         getHouseholdMembers(person) {
@@ -1008,44 +952,46 @@
           // Clear face guesses when a person is selected
           this.faceGuesses = [];
           
-          // Check if we're selecting for an overlap box
-          const isOverlapBox = this.selectedOverlapBox !== null;
-          const targetFile = isOverlapBox ? this.selectedOverlapBox.sourceFile : this.selectedFile;
-          const targetEmbeddingIndex = isOverlapBox ? this.selectedOverlapBox.embeddingIndex : this.selectedBoundingBoxIndex;
-          const targetFacialArea = isOverlapBox ? this.selectedOverlapBox.facialArea : this.getFacialAreaForIndex(targetEmbeddingIndex);
+          // Check if we have either a key box or point label selected
+          if (!this.selectedKeyBox && !this.selectedPointLabelId) return;
           
-          if (targetEmbeddingIndex !== null && targetFile && targetFacialArea) {
+          // Handle key box selection
+          if (this.selectedKeyBox) {
+            const { sourceFile: targetFile, embeddingIndex: targetEmbeddingIndex, facialArea: targetFacialArea, sourceImage, isKeyBoxFromCurrentImage } = this.selectedKeyBox;
+            const isOverlapBox = !isKeyBoxFromCurrentImage;
+            
+            if (targetEmbeddingIndex !== null && targetFile && targetFacialArea) {
             const key = this.getFaceLabelKey(targetFile.name, targetFacialArea);
-            if (key) {
-              // Clear all previously checked people for this bounding box before setting new person
-              if (this.checkedPeopleByBox[key]) {
-                // Uncheck all previously checked people
-                Object.keys(this.checkedPeopleByBox[key]).forEach(personId => {
-                  this.checkedPeopleByBox[key][personId] = false;
-                });
-              }
-              
-              this.faceLabels[key] = person;
-              this.currentSessionLabels[key] = person;
-              // Mark selected person as checked for this bounding box
-              if (person.id) {
-                this.setPersonCheckedForBox(key, person.id, true);
-              }
-              // Initialize checkbox states from per-box list
-              this.selectedPersonChecked = this.isPersonChecked(person.id);
-              this.initializeHouseholdCheckboxes(person);
-              
-              // Reset stored state first
+              if (key) {
+                // Clear all previously checked people for this bounding box before setting new person
+                if (this.checkedPeopleByBox[key]) {
+                  // Uncheck all previously checked people
+                  Object.keys(this.checkedPeopleByBox[key]).forEach(personId => {
+                    this.checkedPeopleByBox[key][personId] = false;
+                  });
+                }
+                
+                this.faceLabels[key] = person;
+                this.currentSessionLabels[key] = person;
+                // Mark selected person as checked for this bounding box
+                if (person.id) {
+                  this.setPersonCheckedForBox(key, person.id, true);
+                }
+                // Initialize checkbox states from per-box list
+                this.selectedPersonChecked = this.isPersonChecked(person.id);
+                this.initializeHouseholdCheckboxes(person);
+                
+                // Reset stored state first
               const resetKey = this.getFaceLabelKey(targetFile.name, targetFacialArea);
-              if (resetKey) {
-                this.embeddingsStored[resetKey] = false;
-              }
-              
-              // Set loading state
-              this.checkingEmbeddingInDB = true;
-              this.$forceUpdate();
-              
-              // Load current embedding data and check if it exists in DB
+                  if (resetKey) {
+                    this.embeddingsStored[resetKey] = false;
+                }
+                
+                // Set loading state
+                this.checkingEmbeddingInDB = true;
+                this.$forceUpdate();
+                
+                // Load current embedding data and check if it exists in DB
               // For overlap boxes, we need to use the overlap file's model
               if (isOverlapBox) {
                 // Temporarily switch to overlap file for loading embedding data
@@ -1066,6 +1012,7 @@
                 this.selectedOverlapBox = null;
                 this.selectedBoundingBoxIndex = null;
               }
+            }
             }
             // Clear search
             this.searchQuery = '';
@@ -1113,9 +1060,11 @@
             });
           });
         },
-        // Get the face label key for the currently selected bounding box
+        // Get the face label key for the currently selected key box
         getCurrentFaceLabelKey() {
-          return Utils.getCurrentFaceLabelKey(this.selectedFile, this.selectedBoundingBoxIndex);
+          if (!this.selectedKeyBox) return null;
+          const { sourceImage, facialArea } = this.selectedKeyBox;
+          return this.getFaceLabelKey(sourceImage, facialArea);
         },
         // Get checked people for a specific bounding box
         getCheckedPeopleForBox(faceLabelKey) {
@@ -1298,23 +1247,25 @@
           return Utils.getEmbeddingsStoredState(this.selectedFile, this.selectedBoundingBoxIndex, this.embeddingsStored);
         },
         loadEmbeddingData() {
-          // Load the embedding data for the current bounding box
-          if (this.selectedBoundingBoxIndex === null || !this.selectedFile || !this.selectedFile.model) {
+          // Load the embedding data for the selected key box
+          if (!this.selectedKeyBox || !this.selectedKeyBox.sourceFile || !this.selectedKeyBox.sourceFile.model) {
             this.currentEmbeddingData = null;
             return;
           }
           
+          const { sourceFile, embeddingIndex } = this.selectedKeyBox;
+          
           try {
-            const model = typeof this.selectedFile.model === 'string' 
-              ? JSON.parse(this.selectedFile.model) 
-              : this.selectedFile.model;
+            const model = typeof sourceFile.model === 'string' 
+              ? JSON.parse(sourceFile.model) 
+              : sourceFile.model;
             
             if (!model.embeddings || !Array.isArray(model.embeddings)) {
               this.currentEmbeddingData = null;
               return;
             }
             
-            const embedding = model.embeddings[this.selectedBoundingBoxIndex];
+            const embedding = model.embeddings[embeddingIndex];
             if (embedding && embedding.embedding) {
               this.currentEmbeddingData = embedding.embedding;
             } else {
@@ -1332,13 +1283,13 @@
             return;
           }
           
-          // Get the key for this bounding box
-          const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-          if (!facialArea) {
+          // Get the key for this key box
+          if (!this.selectedKeyBox) {
             this.checkingEmbeddingInDB = false;
             return;
           }
-          const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
+          const { sourceImage, facialArea } = this.selectedKeyBox;
+          const key = this.getFaceLabelKey(sourceImage, facialArea);
           if (!key) {
             this.checkingEmbeddingInDB = false;
             return;
@@ -1388,9 +1339,9 @@
             
             if (result.success) {
             // Update stored state
-            const facialArea = this.getFacialAreaForIndex(this.selectedBoundingBoxIndex);
-            if (facialArea) {
-              const key = this.getFaceLabelKey(this.selectedFile.name, facialArea);
+            if (this.selectedKeyBox) {
+              const { sourceImage, facialArea } = this.selectedKeyBox;
+              const key = this.getFaceLabelKey(sourceImage, facialArea);
               if (key) {
                 this.embeddingsStored[key] = true;
               }
@@ -1414,13 +1365,9 @@
           return Utils.getFacialAreaForIndex(this.selectedFile.model, embeddingIndex);
         },
         getCurrentFaceLabel() {
-          return Utils.getCurrentFaceLabel(this.selectedFile, this.selectedBoundingBoxIndex, this.faceLabels);
-        },
-        getCurrentFaceLabelForOverlap() {
-          if (!this.selectedOverlapBox) return null;
-          const { sourceFile, facialArea } = this.selectedOverlapBox;
-          if (!sourceFile || !facialArea) return null;
-          const key = this.getFaceLabelKey(sourceFile.name, facialArea);
+          if (!this.selectedKeyBox) return null;
+          const { sourceImage, facialArea } = this.selectedKeyBox;
+          const key = this.getFaceLabelKey(sourceImage, facialArea);
           return key ? this.faceLabels[key] : null;
         },
         getCurrentPointLabel() {
@@ -1501,27 +1448,12 @@
           // Only handle arrow keys when user is logged in and not loading
           if (!this.user || this.loading) return;
           
-          // Handle ESC key to deselect bounding box, overlap box, or point label (works even in input fields)
+          // Handle ESC key to deselect key box or point label (works even in input fields)
           if (event.key === 'Escape') {
-            if (this.selectedOverlapBox !== null) {
+            if (this.selectedKeyBox !== null) {
               event.preventDefault();
-              this.selectedOverlapBox = null;
-              this.searchQuery = '';
-              this.searchResults = [];
-              this.selectedSearchIndex = -1;
-              this.faceGuesses = [];
-              this.selectedPersonChecked = true;
-              this.householdCheckboxes = {};
-              return;
-            }
-            if (this.selectedBoundingBoxIndex !== null) {
-              event.preventDefault();
-              this.selectedBoundingBoxIndex = null;
-              this.searchQuery = '';
-              this.searchResults = [];
-              this.selectedSearchIndex = -1;
-              this.selectedPersonChecked = true;
-              this.householdCheckboxes = {};
+              // Use the same deselection logic as clicking the box
+              this.onClusterBoxDeselected();
               return;
             }
             if (this.selectedPointLabelId !== null) {

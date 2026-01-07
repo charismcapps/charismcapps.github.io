@@ -7,8 +7,7 @@ export const ImageAnnotationCanvas = {
     selectedFile: Object,
     showFaces: Boolean,
     faceLabels: Object,
-    selectedBoundingBoxIndex: Number,
-    selectedOverlapBox: Object,
+    selectedKeyBox: Object, // Unified selection: { clusterId, sourceFile, embeddingIndex, facialArea, sourceImage, isKeyBoxFromCurrentImage }
     pointLabels: Object,
     selectedPointLabelId: String,
     pointLabelPersons: Object,
@@ -21,12 +20,11 @@ export const ImageAnnotationCanvas = {
     fetchModelData: Function
   },
   emits: [
-    'face-box-click',
+    'cluster-box-click', // Unified event for cluster key box selection
+    'cluster-box-deselected', // Unified event for cluster deselection
     'point-label-click',
     'point-label-create',
-    'loading-change',
-    'overlap-face-box-click',
-    'overlap-box-deselected'
+    'loading-change'
   ],
   data() {
     return {
@@ -38,6 +36,8 @@ export const ImageAnnotationCanvas = {
       selectedBoxOpacity: 1,
       selectedPointOpacity: 1,
       blinkInterval: null,
+      blinkKey: 0, // Key to force vue-konva to re-render boxes when blinking
+      localSelectedClusterId: null, // Track selected cluster locally until prop updates
       pointBlinkInterval: null,
       showShiftTooltip: false,
       tooltipX: 0,
@@ -51,8 +51,8 @@ export const ImageAnnotationCanvas = {
       overlapTimeThreshold: 15,  // seconds
       // Track which files we've already requested model data for
       requestedModelFiles: new Set(),
-      // Map to store overlap box data for click handlers
-      overlapBoxClickHandlers: new Map()
+      // Map to store cluster box data for click handlers
+      clusterBoxClickHandlers: new Map()
     };
   },
   computed: {
@@ -504,6 +504,327 @@ export const ImageAnnotationCanvas = {
       
       return allLabels;
     },
+    // Get name labels for all point labels (current image AND overlapping images)
+    allPointNameLabels() {
+      if (!this.selectedFile || !this.pointLabels || !this.pointLabelPersons || !this.imageConfig.image) {
+        return [];
+      }
+      
+      const allLabels = [];
+      
+      // 1. Get current image point name labels
+      const currentImageLabels = this.pointNameLabels;
+      allLabels.push(...currentImageLabels);
+      
+      // 2. Get overlapping image point name labels (transform coordinates)
+      const overlapBoxes = this.overlapBoxes;
+      if (overlapBoxes.length > 0 && this.pointLabels && this.pointLabelPersons) {
+        const img = this.imageConfig.image;
+        const currentNaturalWidth = img.naturalWidth;
+        const currentNaturalHeight = img.naturalHeight;
+        const currentDisplayWidth = this.imageConfig.width;
+        const currentDisplayHeight = this.imageConfig.height;
+        
+        overlapBoxes.forEach(overlapBox => {
+          if (!overlapBox.sourceFile || !overlapBox.sourcePanTilt) {
+            return;
+          }
+          
+          const otherFile = overlapBox.sourceFile;
+          const otherPanTilt = overlapBox.sourcePanTilt;
+          const otherBounds = overlapBox.sourceBounds;
+          const intersection = overlapBox.intersection;
+          
+          // Get point labels for this overlapping image
+          const otherImageName = otherFile.name;
+          const otherPoints = this.pointLabels[otherImageName] || [];
+          
+          if (otherPoints.length === 0) {
+            return;
+          }
+          
+          // Transform coordinates similar to allPointLabelGroups
+          const otherNaturalWidth = currentNaturalWidth;
+          const otherNaturalHeight = currentNaturalHeight;
+          const otherDisplayWidth = currentDisplayWidth;
+          const otherDisplayHeight = currentDisplayHeight;
+          const otherScaleX = otherDisplayWidth / otherNaturalWidth;
+          const otherScaleY = otherDisplayHeight / otherNaturalHeight;
+          
+          const pixelsPerDegreeX_other = otherDisplayWidth / this.fovConfig.width;
+          const pixelsPerDegreeY_other = otherDisplayHeight / this.fovConfig.height;
+          
+          const otherIntersectionXMinPx = (intersection.xMin - otherBounds.xMin) * pixelsPerDegreeX_other;
+          const otherIntersectionXMaxPx = (intersection.xMax - otherBounds.xMin) * pixelsPerDegreeX_other;
+          const otherIntersectionYMinPx = (intersection.yMin - otherBounds.yMin) * pixelsPerDegreeY_other;
+          const otherIntersectionYMaxPx = (intersection.yMax - otherBounds.yMin) * pixelsPerDegreeY_other;
+          
+          const otherIntersectionXMin = otherDisplayWidth - otherIntersectionXMaxPx;
+          const otherIntersectionXMax = otherDisplayWidth - otherIntersectionXMinPx;
+          const otherIntersectionYMin = otherIntersectionYMinPx;
+          const otherIntersectionYMax = otherIntersectionYMaxPx;
+          
+          const greyBoxX = overlapBox.x;
+          const greyBoxY = overlapBox.y;
+          const greyBoxWidth = overlapBox.width;
+          const greyBoxHeight = overlapBox.height;
+          
+          const otherIntersectionWidth = otherIntersectionXMax - otherIntersectionXMin;
+          const otherIntersectionHeight = otherIntersectionYMax - otherIntersectionYMin;
+          const scaleX = greyBoxWidth / otherIntersectionWidth;
+          const scaleY = greyBoxHeight / otherIntersectionHeight;
+          
+          otherPoints.forEach(point => {
+            // Get the identified person for this point label
+            const identifiedPerson = this.pointLabelPersons[point.id] || null;
+            
+            if (!identifiedPerson) return; // No person selected, don't show label
+            
+            // Get checked people for this point label
+            const checkedPeople = this.checkedPeopleByPoint && this.checkedPeopleByPoint[point.id] ? this.checkedPeopleByPoint[point.id] : {};
+            const checkedPersonIds = Object.keys(checkedPeople).filter(personId => checkedPeople[personId]);
+            
+            // If there's an identified person, include them even if not explicitly checked
+            if (identifiedPerson && identifiedPerson.id && !checkedPersonIds.includes(identifiedPerson.id)) {
+              checkedPersonIds.push(identifiedPerson.id);
+            }
+            
+            if (checkedPersonIds.length === 0) return; // No checked people, don't show label
+            
+            // Get person objects for all checked people
+            const checkedPersons = checkedPersonIds
+              .map(personId => {
+                if (!this.planningCentrePeople) return null;
+                return this.planningCentrePeople.find(p => p.id === personId);
+              })
+              .filter(p => p !== null);
+            
+            if (checkedPersons.length === 0) return;
+            
+            // Separate selected person from household members
+            let selectedPerson = identifiedPerson;
+            let householdMembers = checkedPersons.filter(p => p.id !== identifiedPerson.id);
+            
+            if (!selectedPerson || !selectedPerson.name) return;
+            
+            // Transform point coordinates from other image to current image
+            const otherPointX = point.naturalX * otherScaleX;
+            const otherPointY = point.naturalY * otherScaleY;
+            
+            // Check if point is within intersection region
+            if (otherPointX < otherIntersectionXMin || otherPointX > otherIntersectionXMax ||
+                otherPointY < otherIntersectionYMin || otherPointY > otherIntersectionYMax) {
+              return; // Point is outside intersection, skip
+            }
+            
+            // Map to grey box coordinates
+            const relativeX = otherPointX - otherIntersectionXMin;
+            const relativeY = otherPointY - otherIntersectionYMin;
+            
+            const mappedX = greyBoxX + relativeX * scaleX;
+            const mappedY = greyBoxY + relativeY * scaleY;
+            
+            const boxSize = 32; // Default box size for positioning
+            
+            // Build text lines: selected person on first line, each household member on separate lines
+            const fontSize = 12;
+            const padding = 4;
+            const lineHeight = fontSize + 2; // Line height with spacing
+            
+            const texts = [];
+            texts.push({
+              x: padding,
+              y: padding,
+              text: selectedPerson.name,
+              fontSize: fontSize,
+              fontFamily: 'Arial',
+              fill: '#D3D3D3', // Light grey
+              align: 'left'
+            });
+            
+            // Add each household member on a separate line
+            householdMembers.forEach((member, index) => {
+              if (member && member.name) {
+                texts.push({
+                  x: padding,
+                  y: padding + (index + 1) * lineHeight,
+                  text: member.name,
+                  fontSize: fontSize,
+                  fontFamily: 'Arial',
+                  fill: '#D3D3D3', // Light grey
+                  align: 'left'
+                });
+              }
+            });
+            
+            // Calculate dimensions for background
+            const allNames = [selectedPerson.name, ...householdMembers.map(p => p.name).filter(name => name)];
+            const maxTextWidth = Math.max(...allNames.map(name => name.length * fontSize * 0.6));
+            const textHeight = texts.length * lineHeight + padding;
+            const textWidth = maxTextWidth;
+            
+            // Center the group horizontally below the point marker
+            const groupX = mappedX - textWidth / 2 - padding; // Center horizontally
+            const groupY = mappedY + boxSize / 2 + 2; // 2px below the marker
+            
+            allLabels.push({
+              groupX: groupX,
+              groupY: groupY,
+              bgRect: {
+                x: 0,
+                y: 0,
+                width: textWidth + padding * 2,
+                height: textHeight,
+                fill: 'rgba(0, 0, 0, 0.5)', // Semi-transparent black background
+                cornerRadius: 2
+              },
+              texts: texts
+            });
+          });
+        });
+      }
+      
+      return allLabels;
+    },
+    // Get point labels for current image AND overlapping images
+    allPointLabelGroups() {
+      if (!this.selectedFile || !this.pointLabels || !this.imageConfig.image) {
+        return [];
+      }
+      
+      const allPointGroups = [];
+      
+      // 1. Get current image point labels
+      const currentImageGroups = this.pointLabelGroups;
+      allPointGroups.push(...currentImageGroups);
+      
+      // 2. Get overlapping image point labels (transform coordinates)
+      const overlapBoxes = this.overlapBoxes;
+      if (overlapBoxes.length > 0 && this.pointLabels) {
+        const img = this.imageConfig.image;
+        const currentNaturalWidth = img.naturalWidth;
+        const currentNaturalHeight = img.naturalHeight;
+        const currentDisplayWidth = this.imageConfig.width;
+        const currentDisplayHeight = this.imageConfig.height;
+        
+        overlapBoxes.forEach(overlapBox => {
+          if (!overlapBox.sourceFile || !overlapBox.sourcePanTilt) {
+            return;
+          }
+          
+          const otherFile = overlapBox.sourceFile;
+          const otherPanTilt = overlapBox.sourcePanTilt;
+          const otherBounds = overlapBox.sourceBounds;
+          const intersection = overlapBox.intersection;
+          
+          // Get point labels for this overlapping image
+          const otherImageName = otherFile.name;
+          const otherPoints = this.pointLabels[otherImageName] || [];
+          
+          if (otherPoints.length === 0) {
+            return;
+          }
+          
+          // Transform coordinates similar to bounding boxes
+          const otherNaturalWidth = currentNaturalWidth;
+          const otherNaturalHeight = currentNaturalHeight;
+          const otherDisplayWidth = currentDisplayWidth;
+          const otherDisplayHeight = currentDisplayHeight;
+          const otherScaleX = otherDisplayWidth / otherNaturalWidth;
+          const otherScaleY = otherDisplayHeight / otherNaturalHeight;
+          
+          const pixelsPerDegreeX_other = otherDisplayWidth / this.fovConfig.width;
+          const pixelsPerDegreeY_other = otherDisplayHeight / this.fovConfig.height;
+          
+          const otherIntersectionXMinPx = (intersection.xMin - otherBounds.xMin) * pixelsPerDegreeX_other;
+          const otherIntersectionXMaxPx = (intersection.xMax - otherBounds.xMin) * pixelsPerDegreeX_other;
+          const otherIntersectionYMinPx = (intersection.yMin - otherBounds.yMin) * pixelsPerDegreeY_other;
+          const otherIntersectionYMaxPx = (intersection.yMax - otherBounds.yMin) * pixelsPerDegreeY_other;
+          
+          const otherIntersectionXMin = otherDisplayWidth - otherIntersectionXMaxPx;
+          const otherIntersectionXMax = otherDisplayWidth - otherIntersectionXMinPx;
+          const otherIntersectionYMin = otherIntersectionYMinPx;
+          const otherIntersectionYMax = otherIntersectionYMaxPx;
+          
+          const greyBoxX = overlapBox.x;
+          const greyBoxY = overlapBox.y;
+          const greyBoxWidth = overlapBox.width;
+          const greyBoxHeight = overlapBox.height;
+          
+          const otherIntersectionWidth = otherIntersectionXMax - otherIntersectionXMin;
+          const otherIntersectionHeight = otherIntersectionYMax - otherIntersectionYMin;
+          const scaleX = greyBoxWidth / otherIntersectionWidth;
+          const scaleY = greyBoxHeight / otherIntersectionHeight;
+          
+          otherPoints.forEach(point => {
+            // Transform point coordinates from other image to current image
+            const otherPointX = point.naturalX * otherScaleX;
+            const otherPointY = point.naturalY * otherScaleY;
+            
+            // Check if point is within intersection region
+            if (otherPointX < otherIntersectionXMin || otherPointX > otherIntersectionXMax ||
+                otherPointY < otherIntersectionYMin || otherPointY > otherIntersectionYMax) {
+              return; // Point is outside intersection, skip
+            }
+            
+            // Map to grey box coordinates
+            const relativeX = otherPointX - otherIntersectionXMin;
+            const relativeY = otherPointY - otherIntersectionYMin;
+            
+            const mappedX = greyBoxX + relativeX * scaleX;
+            const mappedY = greyBoxY + relativeY * scaleY;
+            
+            const isSelected = this.selectedPointLabelId === point.id;
+            
+            // Check if this point has a person selected
+            const hasPerson = this.pointLabelPersons && this.pointLabelPersons[point.id] ? true : false;
+            
+            // Marker size and offset
+            const fontSize = isSelected ? 24 : 16;
+            const offsetX = isSelected ? 12 : 8;
+            const offsetY = isSelected ? 12 : 8;
+            
+            // Bounding box around the marker
+            const boxSize = isSelected ? 40 : 32;
+            const boxX = mappedX - boxSize / 2;
+            const boxY = mappedY - boxSize / 2;
+            
+            const boxColor = hasPerson ? '#10B981' : '#FFD700';
+            const boxOpacity = isSelected ? this.selectedPointOpacity : 1;
+            
+            allPointGroups.push({
+              id: point.id,
+              boundingBox: {
+                x: boxX,
+                y: boxY,
+                width: boxSize,
+                height: boxSize,
+                fill: 'transparent',
+                stroke: boxColor,
+                strokeWidth: isSelected ? 3 : 2,
+                opacity: boxOpacity
+              },
+              marker: {
+                x: mappedX,
+                y: mappedY,
+                text: '◉',
+                fontSize: fontSize,
+                fontFamily: 'Arial',
+                fill: boxColor,
+                align: 'center',
+                verticalAlign: 'middle',
+                offsetX: offsetX,
+                offsetY: offsetY,
+                opacity: boxOpacity,
+                listening: false
+              }
+            });
+          });
+        });
+      }
+      
+      return allPointGroups;
+    },
     panTiltZoom() {
       // Extract pan, tilt, zoom from filename
       if (!this.selectedFile || !this.selectedFile.name) {
@@ -862,175 +1183,180 @@ export const ImageAnnotationCanvas = {
       
       return { currentBoxes, overlapBoxes: allOverlapBoxes };
     },
-    // Get bounding boxes from overlapping images, transformed to grey box coordinates
-    overlappingImageBoundingBoxes() {
+    // Cluster bounding boxes from different images
+    boundingBoxClusters() {
       if (!this.showFaces || !this.selectedFile || !this.imageConfig.image) {
         return [];
       }
       
       const { currentBoxes, overlapBoxes } = this.allBoundingBoxesWithMetadata;
-      
-      // Combine all boxes for filtering
       const allBoxes = [...currentBoxes, ...overlapBoxes];
       
-      // Filter overlapping boxes (>50% overlap) - keep only best (highest confidence, then largest)
-      const filteredBoxes = [];
-      for (let i = 0; i < allBoxes.length; i++) {
-        const box1 = allBoxes[i];
-        let shouldInclude = true;
-        
-        for (let j = 0; j < allBoxes.length; j++) {
-          if (i === j) continue;
-          
-          const box2 = allBoxes[j];
-          const overlap = this.calculateBoundingBoxOverlap(box1, box2);
-          
-          if (overlap > 0.5) {
-            // Overlap > 50%, compare confidence and size
-            if (box2.faceConfidence > box1.faceConfidence) {
-              shouldInclude = false;
-              break;
-            } else if (box2.faceConfidence === box1.faceConfidence && box2.area > box1.area) {
-              shouldInclude = false;
-              break;
-            }
-          }
-        }
-        
-        if (shouldInclude && !box1.isCurrentImage) {
-          // Only include overlap boxes (current image boxes are handled by facialAreaBoxes)
-          let hasLabel = false;
-          if (this.getFaceLabelKey && this.faceLabels) {
-            const key = this.getFaceLabelKey(box1.sourceImage, box1.facialArea);
-            hasLabel = key ? !!this.faceLabels[key] : false;
-          }
-          
-          // Check if this is the selected overlap box
-          const isSelected = this.selectedOverlapBox && 
-                            this.selectedOverlapBox.sourceFile === box1.sourceFile &&
-                            this.selectedOverlapBox.embeddingIndex === box1.embeddingIndex;
-          
-          // Create a unique ID for this box to use in click handler
-          const boxId = `overlap-${box1.sourceImage}-${box1.embeddingIndex}`;
-          
-          // Determine opacity - use blinking opacity if selected, otherwise default
-          let boxOpacity = 0.6;
-          if (isSelected) {
-            boxOpacity = this.selectedBoxOpacity; // Use blinking opacity
-          }
-          
-          filteredBoxes.push({
-            x: box1.x,
-            y: box1.y,
-            width: box1.width,
-            height: box1.height,
-            stroke: hasLabel ? '#10B981' : '#FFD700',
-            strokeWidth: isSelected ? 4 : 2,
-            fill: 'transparent',
-            opacity: boxOpacity,
-            listening: true,
-            hitStrokeWidth: 10, // Make the stroke area clickable even with transparent fill
-            perfectDrawEnabled: false, // Improve click detection
-            boxId: boxId, // Store ID for click handler lookup
-            sourceFile: box1.sourceFile,
-            sourceImage: box1.sourceImage,
-            embeddingIndex: box1.embeddingIndex,
-            facialArea: box1.facialArea
-          });
-          
-          // Store box data for click handler lookup
-          if (!this.overlapBoxClickHandlers) {
-            this.overlapBoxClickHandlers = new Map();
-          }
-          this.overlapBoxClickHandlers.set(boxId, box1);
-        }
+      if (allBoxes.length === 0) {
+        return [];
       }
       
-      // Check if selected overlap box was filtered out - if so, deselect it
-      if (this.selectedOverlapBox) {
-        const isStillVisible = filteredBoxes.some(box => 
-          box.sourceFile === this.selectedOverlapBox.sourceFile &&
-          box.embeddingIndex === this.selectedOverlapBox.embeddingIndex
-        );
-        if (!isStillVisible) {
-          // Selected box was filtered out, clear selection
-          this.$nextTick(() => {
-            this.$emit('overlap-box-deselected');
-          });
-        }
-      }
+      const clusters = this.clusterBoundingBoxes(allBoxes);
       
-      return filteredBoxes;
+      // For each cluster, select the key box (highest confidence, then largest area)
+      return clusters.map((cluster, index) => {
+        // Select key box: highest confidence, then largest area
+        const keyBox = cluster.reduce((best, box) => {
+          if (box.faceConfidence > best.faceConfidence) return box;
+          if (box.faceConfidence === best.faceConfidence && box.area > best.area) return box;
+          return best;
+        });
+        
+        const keyBoxIndex = cluster.indexOf(keyBox);
+        const isKeyBoxFromCurrentImage = keyBox.isCurrentImage;
+        const clusterId = `cluster-${index}-${keyBox.sourceImage}-${keyBox.embeddingIndex}`;
+        
+        return {
+          clusterId,
+          boxes: cluster,
+          keyBox,
+          keyBoxIndex,
+          isKeyBoxFromCurrentImage,
+          // Key box metadata for easy access
+          x: keyBox.x,
+          y: keyBox.y,
+          width: keyBox.width,
+          height: keyBox.height,
+          faceConfidence: keyBox.faceConfidence,
+          area: keyBox.area,
+          embeddingIndex: keyBox.embeddingIndex,
+          facialArea: keyBox.facialArea,
+          sourceFile: keyBox.sourceFile,
+          sourceImage: keyBox.sourceImage
+        };
+      });
     },
-    // Get filtered current image boxes (excluding those filtered out by overlap)
-    filteredFacialAreaBoxes() {
+    // Get renderable boxes for all clusters (unified rendering)
+    clusteredBoundingBoxes() {
       if (!this.showFaces || !this.selectedFile || !this.imageConfig.image) {
         return [];
       }
       
-      const { currentBoxes, overlapBoxes } = this.allBoundingBoxesWithMetadata;
-      const allBoxes = [...currentBoxes, ...overlapBoxes];
+      const clusters = this.boundingBoxClusters;
+      if (clusters.length === 0) {
+        return [];
+      }
       
-      // Get original facialAreaBoxes for styling
+      // Get original facialAreaBoxes for styling reference
       const originalBoxes = this.facialAreaBoxes;
       const originalBoxMap = new Map();
       originalBoxes.forEach(box => {
         originalBoxMap.set(box.embeddingIndex, box);
       });
       
-      // Filter current image boxes
-      const filteredCurrentBoxes = [];
-      const includedIndices = new Set();
+      const renderableBoxes = [];
       
-      for (let i = 0; i < currentBoxes.length; i++) {
-        const box1 = currentBoxes[i];
-        let shouldInclude = true;
+      clusters.forEach(cluster => {
+        const keyBox = cluster.keyBox;
         
-        for (let j = 0; j < allBoxes.length; j++) {
-          if (i === j && allBoxes[j].isCurrentImage) continue;
-          
-          const box2 = allBoxes[j];
-          const overlap = this.calculateBoundingBoxOverlap(box1, box2);
-          
-          if (overlap > 0.5) {
-            if (box2.faceConfidence > box1.faceConfidence) {
-              shouldInclude = false;
-              break;
-            } else if (box2.faceConfidence === box1.faceConfidence && box2.area > box1.area) {
-              shouldInclude = false;
-              break;
-            }
-          }
+        // Check if key box has a label
+        let hasLabel = false;
+        if (this.getFaceLabelKey && this.faceLabels) {
+          const key = this.getFaceLabelKey(keyBox.sourceImage, keyBox.facialArea);
+          hasLabel = key ? !!this.faceLabels[key] : false;
         }
         
-        if (shouldInclude) {
-          // Use original box styling
-          const originalBox = originalBoxMap.get(box1.embeddingIndex);
+        // Check if this cluster's key box is selected (unified selection)
+        // Use localSelectedClusterId as fallback if prop hasn't updated yet
+        const selectedClusterId = this.selectedKeyBox?.clusterId || this.localSelectedClusterId;
+        const isSelected = selectedClusterId === cluster.clusterId;
+        
+        // Determine opacity - use blinking opacity if selected
+        let boxOpacity = 1;
+        if (isSelected) {
+          boxOpacity = this.selectedBoxOpacity;
+        }
+        
+        // Use styling from facialAreaBoxes if it's a current image box
+        let strokeColor = hasLabel ? '#10B981' : '#FFD700';
+        // Always use thick border (4) when selected, thin (2) when not selected
+        let strokeWidth = isSelected ? 4 : 2;
+        
+        if (cluster.isKeyBoxFromCurrentImage) {
+          // Use original box styling if available, but override strokeWidth for selected boxes
+          const originalBox = originalBoxMap.get(keyBox.embeddingIndex);
           if (originalBox) {
-            filteredCurrentBoxes.push(originalBox);
-            includedIndices.add(box1.embeddingIndex);
+            strokeColor = originalBox.stroke || strokeColor;
+            // Ensure selected boxes always have thick border
+            strokeWidth = isSelected ? 4 : (originalBox.strokeWidth || 2);
           }
+        }
+        
+        const clusterId = cluster.clusterId;
+        // Create a new object each time to ensure vue-konva detects changes
+        const boxConfig = {
+          x: keyBox.x,
+          y: keyBox.y,
+          width: keyBox.width,
+          height: keyBox.height,
+          stroke: strokeColor,
+          strokeWidth: strokeWidth,
+          fill: 'rgba(0,0,0,0.01)', // Very slight fill to ensure clickability
+          opacity: boxOpacity,
+          listening: true,
+          hitStrokeWidth: 20, // Increase hit area for easier clicking
+          perfectDrawEnabled: false,
+          draggable: false, // Ensure boxes are not draggable
+          // Metadata for click handler
+          clusterId: clusterId,
+          isKeyBoxFromCurrentImage: cluster.isKeyBoxFromCurrentImage,
+          keyBoxEmbeddingIndex: keyBox.embeddingIndex,
+          keyBoxSourceFile: keyBox.sourceFile,
+          keyBoxSourceImage: keyBox.sourceImage,
+          keyBoxFacialArea: keyBox.facialArea,
+          // For backward compatibility
+          embeddingIndex: keyBox.embeddingIndex,
+          sourceFile: keyBox.sourceFile,
+          sourceImage: keyBox.sourceImage,
+          facialArea: keyBox.facialArea,
+          // Add onClick handler directly in config
+          onClick: (event) => {
+            this.handleClusterBoxClick(clusterId, event);
+          }
+        };
+        renderableBoxes.push(boxConfig);
+        
+        // Store box data for click handler lookup
+        if (!this.clusterBoxClickHandlers) {
+          this.clusterBoxClickHandlers = new Map();
+        }
+        this.clusterBoxClickHandlers.set(cluster.clusterId, {
+          clusterId: cluster.clusterId,
+          sourceFile: keyBox.sourceFile,
+          embeddingIndex: keyBox.embeddingIndex,
+          facialArea: keyBox.facialArea,
+          sourceImage: keyBox.sourceImage,
+          isKeyBoxFromCurrentImage: cluster.isKeyBoxFromCurrentImage
+        });
+      });
+      
+      // Check if selected cluster was filtered out - if so, deselect it
+      if (this.selectedKeyBox) {
+        const isStillVisible = renderableBoxes.some(box => 
+          box.clusterId === this.selectedKeyBox.clusterId
+        );
+        if (!isStillVisible) {
+          this.$nextTick(() => {
+            this.$emit('cluster-box-deselected');
+          });
         }
       }
       
-      // Check if selected current image box was filtered out - if so, deselect it
-      if (this.selectedBoundingBoxIndex !== null && !includedIndices.has(this.selectedBoundingBoxIndex)) {
-        // Selected box was filtered out, clear selection
-        this.$nextTick(() => {
-          this.$emit('face-box-deselected');
-        });
-      }
-      
-      return filteredCurrentBoxes;
+      return renderableBoxes;
     },
-    // Get name labels for overlapping image bounding boxes
-    overlappingImageNameLabels() {
+    // Get name labels for clustered bounding boxes
+    clusteredNameLabels() {
       if (!this.showFaces || !this.selectedFile || !this.imageConfig.image) {
         return [];
       }
       
-      const overlappingBoxes = this.overlappingImageBoundingBoxes;
-      if (overlappingBoxes.length === 0) {
+      const clusters = this.boundingBoxClusters;
+      if (clusters.length === 0) {
         return [];
       }
       
@@ -1040,18 +1366,20 @@ export const ImageAnnotationCanvas = {
       
       const allLabels = [];
       
-      for (const box of overlappingBoxes) {
-        if (!box.sourceFile || !box.facialArea) {
-          continue;
+      clusters.forEach(cluster => {
+        const keyBox = cluster.keyBox;
+        
+        if (!keyBox.sourceFile || !keyBox.facialArea) {
+          return;
         }
         
         // Get the face label key for this bounding box
         let key = null;
         if (this.getFaceLabelKey) {
-          key = this.getFaceLabelKey(box.sourceImage, box.facialArea);
+          key = this.getFaceLabelKey(keyBox.sourceImage, keyBox.facialArea);
         }
         
-        if (!key) continue;
+        if (!key) return;
         
         // Get the identified person from faceLabels
         const identifiedPerson = this.faceLabels && this.faceLabels[key] ? this.faceLabels[key] : null;
@@ -1065,7 +1393,7 @@ export const ImageAnnotationCanvas = {
           checkedPersonIds.push(identifiedPerson.id);
         }
         
-        if (checkedPersonIds.length === 0) continue; // No checked people, don't show label
+        if (checkedPersonIds.length === 0) return; // No checked people, don't show label
         
         // Get person objects for all checked people
         const checkedPersons = checkedPersonIds
@@ -1075,7 +1403,7 @@ export const ImageAnnotationCanvas = {
           })
           .filter(p => p !== null);
         
-        if (checkedPersons.length === 0) continue;
+        if (checkedPersons.length === 0) return;
         
         // Separate selected person from household members
         let selectedPerson = null;
@@ -1128,8 +1456,8 @@ export const ImageAnnotationCanvas = {
         const textWidth = maxTextWidth;
         
         // Center the group horizontally below the box
-        const groupX = box.x + (box.width - textWidth) / 2 - padding;
-        const groupY = box.y + box.height + 2;
+        const groupX = keyBox.x + (keyBox.width - textWidth) / 2 - padding;
+        const groupY = keyBox.y + keyBox.height + 2;
         
         allLabels.push({
           groupX: groupX,
@@ -1144,23 +1472,16 @@ export const ImageAnnotationCanvas = {
           },
           texts: texts
         });
-      }
+      });
       
       return allLabels;
-    }
+    },
+    // Get bounding boxes from overlapping images, transformed to grey box coordinates
   },
   watch: {
-    selectedFile: {
-      handler() {
-        // Clear click handlers map when switching images
-        if (this.overlapBoxClickHandlers) {
-          this.overlapBoxClickHandlers.clear();
-        }
-      }
-    },
-    selectedBoundingBoxIndex: {
-      handler(newVal) {
-        // Start/stop blinking animation when selection changes
+    selectedKeyBox: {
+      handler(newVal, oldVal) {
+        // Always clear blinking interval first (same pattern as point labels)
         if (this.blinkInterval) {
           clearInterval(this.blinkInterval);
           this.blinkInterval = null;
@@ -1168,44 +1489,21 @@ export const ImageAnnotationCanvas = {
         
         if (newVal !== null) {
           // Start blinking animation
+          this.localSelectedClusterId = newVal.clusterId;
           this.selectedBoxOpacity = 1;
           this.blinkInterval = setInterval(() => {
             this.selectedBoxOpacity = this.selectedBoxOpacity === 1 ? 0.3 : 1;
-            // Force update to trigger recomputation of facialAreaBoxes
+            this.blinkKey = this.blinkKey + 1;
             this.$forceUpdate();
-          }, 500); // Blink every 500ms
-        } else if (!this.selectedOverlapBox) {
-          // Stop blinking only if no overlap box is selected
-          this.selectedBoxOpacity = 1;
-        }
-      },
-      immediate: false
-    },
-    selectedOverlapBox: {
-      handler(newVal, oldVal) {
-        // Start/stop blinking animation when overlap box selection changes
-        // Always clear interval first
-        if (this.blinkInterval) {
-          clearInterval(this.blinkInterval);
-          this.blinkInterval = null;
-        }
-        
-        if (newVal !== null && newVal !== undefined) {
-          // Start blinking animation for overlap box
-          this.selectedBoxOpacity = 1;
-          this.blinkInterval = setInterval(() => {
-            this.selectedBoxOpacity = this.selectedBoxOpacity === 1 ? 0.3 : 1;
-            // Force update to trigger recomputation of overlappingImageBoundingBoxes
-            this.$forceUpdate();
-          }, 500); // Blink every 500ms
+          }, 500);
         } else {
-          // Overlap box was deselected - stop blinking if no regular box is selected
-          if (!this.selectedBoundingBoxIndex) {
-            this.selectedBoxOpacity = 1;
-          }
+          // Stop blinking
+          this.localSelectedClusterId = null;
+          this.selectedBoxOpacity = 1;
         }
       },
-      immediate: false
+      immediate: false,
+      deep: false
     },
     selectedPointLabelId: {
       handler(newVal) {
@@ -1242,6 +1540,10 @@ export const ImageAnnotationCanvas = {
         // Clear requested model files when switching files to avoid stale state
         if (newFile !== oldFile) {
           this.requestedModelFiles.clear();
+        }
+        // Clear cluster box click handlers when switching files
+        if (this.clusterBoxClickHandlers) {
+          this.clusterBoxClickHandlers.clear();
         }
         // Recalculate boxes when file changes
         this.$nextTick(() => {
@@ -1291,57 +1593,47 @@ export const ImageAnnotationCanvas = {
     }
   },
   methods: {
-    handleBoxClick(embeddingIndex) {
-      // Clear overlap box selection when clicking a regular box
-      if (this.selectedOverlapBox) {
-        this.$emit('overlap-box-deselected');
-      }
-      this.$emit('face-box-click', embeddingIndex);
-    },
-    handleOverlapBoxClick(box, event) {
-      console.log('handleOverlapBoxClick called!', box, event);
-      
+    // Unified handler for cluster box clicks
+    handleClusterBoxClick(clusterId, event) {
       // Stop event propagation to prevent interfering with other clicks
       if (event) {
-        // Stop Konva event propagation
         if (event.cancelBubble !== undefined) {
           event.cancelBubble = true;
         }
-        // Stop native event propagation
         if (event.evt) {
           event.evt.stopPropagation();
           event.evt.preventDefault();
         }
       }
       
-      // Toggle selection - if clicking the same box, deselect it
-      const isSameBox = this.selectedOverlapBox && 
-                        this.selectedOverlapBox.sourceFile === box.sourceFile &&
-                        this.selectedOverlapBox.embeddingIndex === box.embeddingIndex;
-      
-      if (isSameBox) {
-        // Deselect the overlap box - emit event to parent to clear it
-        this.$emit('overlap-box-deselected');
-      } else {
-        // Set selected overlap box to allow setting person while staying on current image
-        const overlapBoxData = {
-          sourceFile: box.sourceFile,
-          embeddingIndex: box.embeddingIndex,
-          facialArea: box.facialArea,
-          sourceImage: box.sourceImage
-        };
-        // Emit event for parent component to set it
-        this.$emit('overlap-face-box-click', overlapBoxData);
+      // Look up box data from Map
+      if (!this.clusterBoxClickHandlers || !this.clusterBoxClickHandlers.has(clusterId)) {
+        return;
       }
-    },
-    // Handle overlap box click from template
-    handleOverlapBoxClickFromTemplate(boxId, event) {
-      console.log('handleOverlapBoxClickFromTemplate called with boxId:', boxId, 'event:', event);
-      if (this.overlapBoxClickHandlers && this.overlapBoxClickHandlers.has(boxId)) {
-        const box = this.overlapBoxClickHandlers.get(boxId);
-        this.handleOverlapBoxClick(box, event);
+      
+      const clusterBox = this.clusterBoxClickHandlers.get(clusterId);
+      
+      // Unified selection: check if clicking the same cluster
+      const selectedClusterId = this.selectedKeyBox?.clusterId || this.localSelectedClusterId;
+      const isSameCluster = selectedClusterId === clusterId;
+      
+      if (isSameCluster) {
+        // Deselect - stop blinking and emit event to parent
+        this.handleDeselection();
+        this.$emit('cluster-box-deselected');
       } else {
-        console.error('Box not found in handlers map:', boxId);
+        // Select this cluster's key box
+        const keyBoxData = {
+          clusterId: clusterBox.clusterId,
+          sourceFile: clusterBox.sourceFile,
+          embeddingIndex: clusterBox.embeddingIndex,
+          facialArea: clusterBox.facialArea,
+          sourceImage: clusterBox.sourceImage,
+          isKeyBoxFromCurrentImage: clusterBox.isKeyBoxFromCurrentImage
+        };
+        // Emit unified event for parent component
+        // The watcher will handle starting the blinking animation when selectedKeyBox prop updates
+        this.$emit('cluster-box-click', keyBoxData);
       }
     },
     handleStageMouseMove(event) {
@@ -1368,11 +1660,20 @@ export const ImageAnnotationCanvas = {
       }
     },
     handleStageClick(event) {
-      // Check if Shift key is pressed and left mouse button
-      if (event.evt.shiftKey && event.evt.button === 0) {
+      // Don't allow point label creation when in selection mode
+      if (this.selectedKeyBox) {
+        return;
+      }
+      
+      // Check if Shift key is pressed
+      const evt = event.evt || event;
+      if (evt && evt.shiftKey) {
         // Get the stage position
-        const stage = event.target.getStage();
+        const stage = event.target ? event.target.getStage() : event.getStage();
+        if (!stage) return;
+        
         const pointerPos = stage.getPointerPosition();
+        if (!pointerPos) return;
         
         // Get image dimensions and scale factors
         if (!this.imageConfig.image) return;
@@ -1401,6 +1702,10 @@ export const ImageAnnotationCanvas = {
     },
     handlePointLabelClick(pointId) {
       this.$emit('point-label-click', pointId);
+    },
+    handleDeselection() {
+      // Clear local selection state (watcher handles interval clearing automatically)
+      this.localSelectedClusterId = null;
     },
     updateDimensions() {
       // Use window.Utils to ensure it's available
@@ -1559,6 +1864,97 @@ export const ImageAnnotationCanvas = {
       // Return IoU (intersection over union)
       return intersectionArea / unionArea;
     },
+    // Check if two boxes overlap >50% in BOTH width AND height
+    // PRECONDITION: Both boxes must be in the same coordinate system (current image coordinates)
+    // This is guaranteed by allBoundingBoxesWithMetadata() which transforms overlapping boxes
+    checkBoxOverlap(box1, box2) {
+      // Calculate intersection
+      const x1Min = box1.x;
+      const x1Max = box1.x + box1.width;
+      const y1Min = box1.y;
+      const y1Max = box1.y + box1.height;
+      
+      const x2Min = box2.x;
+      const x2Max = box2.x + box2.width;
+      const y2Min = box2.y;
+      const y2Max = box2.y + box2.height;
+      
+      const xMin = Math.max(x1Min, x2Min);
+      const xMax = Math.min(x1Max, x2Max);
+      const yMin = Math.max(y1Min, y2Min);
+      const yMax = Math.min(y1Max, y2Max);
+      
+      if (xMin >= xMax || yMin >= yMax) {
+        return false; // No intersection
+      }
+      
+      const intersectionWidth = xMax - xMin;
+      const intersectionHeight = yMax - yMin;
+      
+      // Check if >50% overlap in width
+      const widthOverlap = intersectionWidth / Math.min(box1.width, box2.width) > 0.5;
+      
+      // Check if >50% overlap in height
+      const heightOverlap = intersectionHeight / Math.min(box1.height, box2.height) > 0.5;
+      
+      return widthOverlap && heightOverlap;
+    },
+    // Cluster bounding boxes from different images
+    // PRECONDITION: All boxes are in the same coordinate system (current image coordinates)
+    clusterBoundingBoxes(boxes) {
+      if (!boxes || boxes.length === 0) {
+        return [];
+      }
+      
+      const clusters = [];
+      const clusteredBoxes = new Set(); // Boxes already in clusters
+      
+      // For each box in boxes
+      for (const box of boxes) {
+        // Skip if already in a cluster
+        if (clusteredBoxes.has(box)) continue;
+        
+        // Create a new cluster with this box
+        const currentCluster = [box];
+        clusteredBoxes.add(box);
+        
+        // Processing stack for DFS
+        const processingStack = [box];
+        
+        // While processing stack is not empty
+        while (processingStack.length > 0) {
+          // Pop a box from the stack - this is the box to process
+          const boxToProcess = processingStack.pop();
+          
+          // Iterate through every other box not in the list of boxes already in clusters
+          for (const candidateBox of boxes) {
+            // Skip if already in a cluster
+            if (clusteredBoxes.has(candidateBox)) continue;
+            
+            // Check that current cluster does not have a box that shares the same source image as the candidate box
+            const hasSameSourceImage = currentCluster.some(
+              clusterBox => clusterBox.sourceImage === candidateBox.sourceImage
+            );
+            if (hasSameSourceImage) continue; // Skip this candidate
+            
+            // Check that the candidate and the box to process overlaps with checkBoxOverlap
+            if (this.checkBoxOverlap(boxToProcess, candidateBox)) {
+              // If it overlaps, add this box to the cluster
+              currentCluster.push(candidateBox);
+              // Add this box to the list of boxes already in clusters
+              clusteredBoxes.add(candidateBox);
+              // Add this box to processing stack
+              processingStack.push(candidateBox);
+            }
+          }
+        }
+        
+        // Add the completed cluster to clusters list
+        clusters.push(currentCluster);
+      }
+      
+      return clusters;
+    },
     // Calculate field of view bounds for an image
     // Note: CCTV is upside down - left is positive, right is negative; up is negative, down is positive
     calculateFovBounds(pan, tilt) {
@@ -1671,15 +2067,15 @@ export const ImageAnnotationCanvas = {
     <v-stage v-else :config="stageConfig" @mousedown="handleStageClick" @mousemove="handleStageMouseMove" @mouseleave="handleStageMouseLeave">
       <v-layer>
         <v-image :config="imageConfig"></v-image>
-        <v-rect v-for="(box, index) in filteredFacialAreaBoxes" :key="index" :config="box" @click="handleBoxClick(box.embeddingIndex)"></v-rect>
-        <v-group v-for="(label, index) in nameLabels" :key="'name-' + index" :config="{ x: label.groupX, y: label.groupY }">
+        <v-rect v-for="(box, index) in clusteredBoundingBoxes" :key="'cluster-box-' + index + '-' + blinkKey" :config="box"></v-rect>
+        <v-group v-for="(label, index) in clusteredNameLabels" :key="'cluster-name-' + index" :config="{ x: label.groupX, y: label.groupY }">
           <v-rect :config="label.bgRect"></v-rect>
           <v-text v-for="(textItem, textIndex) in label.texts" :key="'text-' + textIndex" :config="textItem"></v-text>
         </v-group>
         <v-rect v-for="(box, index) in annotations" :key="'annotation-' + index" :config="box"></v-rect>
-        <v-rect v-for="(pointGroup, index) in pointLabelGroups" :key="'point-box-' + index" :config="pointGroup.boundingBox" @click="handlePointLabelClick(pointGroup.id)"></v-rect>
-        <v-text v-for="(pointGroup, index) in pointLabelGroups" :key="'point-marker-' + index" :config="pointGroup.marker"></v-text>
-        <v-group v-for="(label, index) in pointNameLabels" :key="'point-name-' + index" :config="{ x: label.groupX, y: label.groupY }">
+        <v-rect v-for="(pointGroup, index) in allPointLabelGroups" :key="'point-box-' + index" :config="pointGroup.boundingBox" @click="handlePointLabelClick(pointGroup.id)"></v-rect>
+        <v-text v-for="(pointGroup, index) in allPointLabelGroups" :key="'point-marker-' + index" :config="pointGroup.marker"></v-text>
+        <v-group v-for="(label, index) in allPointNameLabels" :key="'point-name-' + index" :config="{ x: label.groupX, y: label.groupY }">
           <v-rect :config="label.bgRect"></v-rect>
           <v-text v-for="(textItem, textIndex) in label.texts" :key="'point-text-' + textIndex" :config="textItem"></v-text>
         </v-group>
@@ -1688,11 +2084,6 @@ export const ImageAnnotationCanvas = {
           <v-text :config="panTiltZoomConfig.text"></v-text>
         </v-group>
         <v-rect v-for="(overlapBox, index) in overlapBoxes" :key="'overlap-' + index" :config="overlapBox"></v-rect>
-        <v-rect v-for="(box, index) in overlappingImageBoundingBoxes" :key="'overlap-bbox-' + index" :config="box" @click="handleOverlapBoxClickFromTemplate(box.boxId, $event)"></v-rect>
-        <v-group v-for="(label, index) in overlappingImageNameLabels" :key="'overlap-name-' + index" :config="{ x: label.groupX, y: label.groupY }">
-          <v-rect :config="label.bgRect"></v-rect>
-          <v-text v-for="(textItem, textIndex) in label.texts" :key="'overlap-text-' + textIndex" :config="textItem"></v-text>
-        </v-group>
       </v-layer>
     </v-stage>
     <div v-if="showShiftTooltip" :style="{ position: 'absolute', left: tooltipX + 'px', top: tooltipY + 'px', pointerEvents: 'none', zIndex: 1000, backgroundColor: 'rgba(0, 0, 0, 0.8)', color: 'white', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', whiteSpace: 'nowrap' }">

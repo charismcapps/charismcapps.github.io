@@ -12,8 +12,7 @@ export const ImageAnnotationPanel = {
     currentFileIndex: Number,
     hasPrevImage: Boolean,
     hasNextImage: Boolean,
-    selectedBoundingBoxIndex: Number,
-    selectedOverlapBox: Object,
+    selectedKeyBox: Object,
     annotations: Array,
     showFaces: Boolean,
     faceLabels: Object,
@@ -274,8 +273,7 @@ export const ImageAnnotationPanel = {
               :selected-file="selectedFile" 
               :show-faces="showFaces" 
               :face-labels="faceLabels" 
-              :selected-bounding-box-index="selectedBoundingBoxIndex" 
-              :selected-overlap-box="selectedOverlapBox"
+              :selected-key-box="selectedKeyBox"
               :point-labels="pointLabels" 
               :selected-point-label-id="selectedPointLabelId" 
               :point-label-persons="pointLabelPersons" 
@@ -288,8 +286,8 @@ export const ImageAnnotationPanel = {
               :fetch-model-data="fetchModelData"
               @loading-change="$emit('loading-change', $event)"
               @face-box-click="$emit('face-box-click', $event)"
-              @overlap-face-box-click="$emit('overlap-face-box-click', $event)"
-              @overlap-box-deselected="$emit('overlap-box-deselected')"
+              @cluster-box-click="$emit('cluster-box-click', $event)"
+              @cluster-box-deselected="$emit('cluster-box-deselected')"
               @face-box-deselected="$emit('face-box-deselected')"
               @point-label-click="$emit('point-label-click', $event)"
               @point-label-create="$emit('point-label-create', $event)"
