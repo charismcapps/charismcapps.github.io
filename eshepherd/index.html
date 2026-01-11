@@ -399,11 +399,11 @@
         transformToTree(data) {
           return Services.file.transformToTree(data);
         },
-        onSessionChange() {
-          if (!this.selectedSessionName) return;
+        onSessionChange(newSessionName) {
+          if (!newSessionName) return;
           
           // Find the session by name
-          const session = this.sessions.find(s => s.name === this.selectedSessionName);
+          const session = this.sessions.find(s => s.name === newSessionName);
           if (session) {
             this.bannerVisible = true; // Show banner when selecting session
             this.onSelectSession(session);
