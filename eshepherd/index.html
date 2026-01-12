@@ -973,13 +973,19 @@
                 
                 this.faceLabels[key] = person;
                 this.currentSessionLabels[key] = person;
-                // Mark selected person as checked for this bounding box
-                if (person.id) {
+                // Mark selected person as checked for this bounding box (including Unknown Person - id 0)
+                if (person.id !== undefined && person.id !== null) {
                   this.setPersonCheckedForBox(key, person.id, true);
                 }
                 // Initialize checkbox states from per-box list
-                this.selectedPersonChecked = this.isPersonChecked(person.id);
-                this.initializeHouseholdCheckboxes(person);
+                if (person.id !== 0) {
+                  this.selectedPersonChecked = this.isPersonChecked(person.id);
+                  this.initializeHouseholdCheckboxes(person);
+                } else {
+                  // For Unknown Person, set checkbox state but no household
+                  this.selectedPersonChecked = this.isPersonChecked(person.id);
+                  this.householdCheckboxes = {};
+                }
                 
                 // Reset stored state first
               const resetKey = this.getFaceLabelKey(targetFile.name, targetFacialArea);
@@ -987,25 +993,38 @@
                     this.embeddingsStored[resetKey] = false;
                 }
                 
-                // Set loading state
-                this.checkingEmbeddingInDB = true;
-                this.$forceUpdate();
-                
-                // Load current embedding data and check if it exists in DB
-              // For overlap boxes, we need to use the overlap file's model
-              if (isOverlapBox) {
-                // Temporarily switch to overlap file for loading embedding data
-                const originalFile = this.selectedFile;
-                this.selectedFile = targetFile;
-                this.loadEmbeddingData();
-                await this.getEmbeddingsCount();
-                await this.checkEmbeddingInDB();
-                this.selectedFile = originalFile; // Restore original file
-              } else {
-                this.loadEmbeddingData();
-                await this.getEmbeddingsCount();
-                await this.checkEmbeddingInDB();
-              }
+                // Skip embedding checks for Unknown (id 0)
+                if (person.id !== 0) {
+                  // Set loading state
+                  this.checkingEmbeddingInDB = true;
+                  this.$forceUpdate();
+                  
+                  // Load current embedding data and check if it exists in DB
+                  // For overlap boxes, we need to use the overlap file's model
+                  if (isOverlapBox) {
+                    // Temporarily switch to overlap file for loading embedding data
+                    const originalFile = this.selectedFile;
+                    this.selectedFile = targetFile;
+                    this.loadEmbeddingData();
+                    await this.getEmbeddingsCount();
+                    await this.checkEmbeddingInDB();
+                    this.selectedFile = originalFile; // Restore original file
+                  } else {
+                    this.loadEmbeddingData();
+                    await this.getEmbeddingsCount();
+                    await this.checkEmbeddingInDB();
+                  }
+                } else {
+                  // For Unknown Person, just update UI and exit selection mode
+                  this.checkingEmbeddingInDB = false;
+                  this.$forceUpdate();
+                  
+                  // Exit selection mode automatically for Unknown Person
+                  this.$nextTick(() => {
+                    this.selectedKeyBox = null;
+                    this.$forceUpdate();
+                  });
+                }
               
               // Clear overlap box selection after setting person
               if (isOverlapBox) {
@@ -1027,13 +1046,25 @@
           } else if (this.selectedPointLabelId !== null) {
             // Handle point label selection
             this.pointLabelPersons[this.selectedPointLabelId] = person;
-            // Mark selected person as checked for this point label
-            if (person.id) {
+            // Mark selected person as checked for this point label (including Unknown Person - id 0)
+            if (person.id !== undefined && person.id !== null) {
               this.setPersonCheckedForPoint(this.selectedPointLabelId, person.id, true);
             }
             // Initialize checkbox states from per-point list
-            this.selectedPersonChecked = this.isPersonCheckedForPoint(this.selectedPointLabelId, person.id);
-            this.initializeHouseholdCheckboxesForPoint(this.selectedPointLabelId, person);
+            if (person.id !== 0) {
+              this.selectedPersonChecked = this.isPersonCheckedForPoint(this.selectedPointLabelId, person.id);
+              this.initializeHouseholdCheckboxesForPoint(this.selectedPointLabelId, person);
+            } else {
+              // For Unknown Person, set checkbox state but no household and exit selection mode
+              this.selectedPersonChecked = this.isPersonCheckedForPoint(this.selectedPointLabelId, person.id);
+              this.householdCheckboxes = {};
+              
+              // Exit selection mode automatically for Unknown Person
+              this.$nextTick(() => {
+                this.selectedPointLabelId = null;
+                this.$forceUpdate();
+              });
+            }
             
             // Clear search
             this.searchQuery = '';
@@ -1072,7 +1103,7 @@
         },
         // Set checked state for a person in a specific bounding box
         setPersonCheckedForBox(faceLabelKey, personId, checked) {
-          if (!faceLabelKey || !personId) return;
+          if (!faceLabelKey || (personId !== 0 && personId !== '0' && !personId)) return;
           if (!this.checkedPeopleByBox[faceLabelKey]) {
             this.checkedPeopleByBox[faceLabelKey] = {};
           }
@@ -1080,6 +1111,12 @@
             this.checkedPeopleByBox[faceLabelKey][personId] = true;
           } else {
             delete this.checkedPeopleByBox[faceLabelKey][personId];
+            // Also delete string version if it exists
+            if (typeof personId === 'number') {
+              delete this.checkedPeopleByBox[faceLabelKey][String(personId)];
+            } else if (typeof personId === 'string') {
+              delete this.checkedPeopleByBox[faceLabelKey][Number(personId)];
+            }
           }
         },
         // Check if a person is checked for the current bounding box
@@ -1090,7 +1127,7 @@
         handleSelectedPersonCheckboxChange(event) {
           const currentLabel = this.getCurrentFaceLabel();
           const faceLabelKey = this.getCurrentFaceLabelKey();
-          if (currentLabel && currentLabel.id && faceLabelKey) {
+          if (currentLabel && currentLabel.id !== undefined && currentLabel.id !== null && faceLabelKey) {
             const checked = event.target.checked;
             // Update local state
             this.selectedPersonChecked = checked;
@@ -1120,6 +1157,7 @@
               
               // Deselect the bounding box so it's no longer in selected state (not blinking)
               this.selectedBoundingBoxIndex = null;
+              this.selectedKeyBox = null;
               this.searchQuery = '';
               this.searchResults = [];
               this.selectedSearchIndex = -1;
@@ -1128,7 +1166,9 @@
               this.$forceUpdate();
             } else {
               // When re-checking, restore household checkbox states from per-box list
-              this.initializeHouseholdCheckboxes(currentLabel);
+              if (currentLabel.id !== 0) {
+                this.initializeHouseholdCheckboxes(currentLabel);
+              }
             }
           }
         },
@@ -1377,11 +1417,19 @@
           return Utils.isPersonCheckedForPoint(this.checkedPeopleByPoint, pointLabelId, personId);
         },
         setPersonCheckedForPoint(pointLabelId, personId, checked) {
-          if (!pointLabelId || !personId) return;
+          if (!pointLabelId || (personId !== 0 && personId !== '0' && !personId)) return;
           if (!this.checkedPeopleByPoint[pointLabelId]) {
             this.checkedPeopleByPoint[pointLabelId] = {};
           }
           this.checkedPeopleByPoint[pointLabelId][personId] = checked;
+          // Also handle string/number conversion for consistency
+          if (!checked) {
+            if (typeof personId === 'number') {
+              delete this.checkedPeopleByPoint[pointLabelId][String(personId)];
+            } else if (typeof personId === 'string') {
+              delete this.checkedPeopleByPoint[pointLabelId][Number(personId)];
+            }
+          }
         },
         initializeHouseholdCheckboxesForPoint(pointLabelId, person) {
           if (!pointLabelId || !person || !this.getHouseholdMembers) return;

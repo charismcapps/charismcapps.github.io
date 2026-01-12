@@ -73,9 +73,10 @@ export function getCheckedPeopleForBox(checkedPeopleByBox, faceLabelKey) {
  * @returns {boolean} - True if the person is checked
  */
 export function isPersonCheckedForPoint(checkedPeopleByPoint, pointLabelId, personId) {
-  if (!pointLabelId || !personId) return false;
+  if (!pointLabelId || (personId !== 0 && personId !== '0' && !personId)) return false;
   const checkedPeople = checkedPeopleByPoint?.[pointLabelId] || {};
-  return !!checkedPeople[personId];
+  // Check both string and number versions
+  return !!(checkedPeople[personId] || checkedPeople[String(personId)] || checkedPeople[Number(personId)]);
 }
 
 /**
@@ -86,9 +87,10 @@ export function isPersonCheckedForPoint(checkedPeopleByPoint, pointLabelId, pers
  * @returns {boolean} - True if the person is checked
  */
 export function isPersonChecked(checkedPeopleByBox, faceLabelKey, personId) {
-  if (!faceLabelKey || !personId) return false;
+  if (!faceLabelKey || (personId !== 0 && personId !== '0' && !personId)) return false;
   const checkedPeople = getCheckedPeopleForBox(checkedPeopleByBox, faceLabelKey);
-  return checkedPeople[personId] || false;
+  // Check both string and number versions
+  return !!(checkedPeople[personId] || checkedPeople[String(personId)] || checkedPeople[Number(personId)]);
 }
 
 /**
@@ -142,14 +144,16 @@ export function getSelectedCheckInPersonIds(checkedPeopleByBox, checkedPeopleByP
   const allCheckedPeople = {};
   Object.values(checkedPeopleByBox || {}).forEach(checkedPeople => {
     Object.keys(checkedPeople).forEach(personId => {
-      if (checkedPeople[personId]) {
+      // Filter out person id "0" (Unknown) - it should never be added to check-in list
+      if (checkedPeople[personId] && personId !== "0" && personId !== 0) {
         allCheckedPeople[personId] = true;
       }
     });
   });
   Object.values(checkedPeopleByPoint || {}).forEach(checkedPeople => {
     Object.keys(checkedPeople).forEach(personId => {
-      if (checkedPeople[personId]) {
+      // Filter out person id "0" (Unknown) - it should never be added to check-in list
+      if (checkedPeople[personId] && personId !== "0" && personId !== 0) {
         allCheckedPeople[personId] = true;
       }
     });

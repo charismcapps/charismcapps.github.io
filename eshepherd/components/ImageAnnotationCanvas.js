@@ -211,22 +211,54 @@ export const ImageAnnotationCanvas = {
           
           // Get checked people for this bounding box
           const checkedPeople = this.checkedPeopleByBox && this.checkedPeopleByBox[key] ? this.checkedPeopleByBox[key] : {};
-          const checkedPersonIds = Object.keys(checkedPeople).filter(personId => checkedPeople[personId]);
+          // Normalize keys to handle both string and number IDs
+          const checkedPersonIds = [];
+          Object.keys(checkedPeople).forEach(personId => {
+            if (checkedPeople[personId]) {
+              checkedPersonIds.push(personId);
+            }
+          });
+          
+          // Check if Unknown Person (id 0) is checked - handle both string "0" and number 0
+          const isUnknownPersonChecked = checkedPeople['0'] === true || checkedPeople[0] === true;
+          const isUnknownPerson = identifiedPerson && (identifiedPerson.id === 0 || identifiedPerson.id === '0');
           
           // If there's an identified person, include them even if not explicitly checked
-          if (identifiedPerson && identifiedPerson.id && !checkedPersonIds.includes(identifiedPerson.id)) {
-            checkedPersonIds.push(identifiedPerson.id);
+          // Exception: Unknown Person (id 0) must be explicitly checked to show
+          if (identifiedPerson && identifiedPerson.id !== undefined && identifiedPerson.id !== null) {
+            const idStr = String(identifiedPerson.id);
+            if (!checkedPersonIds.includes(idStr) && !isUnknownPerson) {
+              checkedPersonIds.push(idStr);
+            }
           }
           
-          if (checkedPersonIds.length === 0) return; // No checked people, don't show label
+          if (checkedPersonIds.length === 0 && !isUnknownPersonChecked) return; // No checked people, don't show label
           
           // Get person objects for all checked people
-          const checkedPersons = checkedPersonIds
-            .map(personId => {
-              if (!this.planningCentrePeople) return null;
-              return this.planningCentrePeople.find(p => p.id === personId);
-            })
-            .filter(p => p !== null);
+          const checkedPersons = [];
+          
+          // Handle Unknown Person specially
+          if (isUnknownPersonChecked && isUnknownPerson) {
+            checkedPersons.push(identifiedPerson);
+          }
+          
+          // Handle regular people
+          checkedPersonIds.forEach(personId => {
+            // Skip "0" if we already added Unknown Person
+            if (personId === '0' || personId === 0) {
+              if (!isUnknownPersonChecked || !isUnknownPerson) {
+                return; // Skip if Unknown Person not checked or not identified
+              }
+              return; // Already added above
+            }
+            
+            if (this.planningCentrePeople) {
+              const person = this.planningCentrePeople.find(p => String(p.id) === String(personId));
+              if (person) {
+                checkedPersons.push(person);
+              }
+            }
+          });
           
           if (checkedPersons.length === 0) return;
           
@@ -238,11 +270,11 @@ export const ImageAnnotationCanvas = {
             // Use identified person as selected person
             selectedPerson = identifiedPerson;
             // Get household members from checked people (excluding selected person)
-            householdMembers = checkedPersons.filter(p => p.id !== identifiedPerson.id);
+            householdMembers = checkedPersons.filter(p => p && p.id !== undefined && String(p.id) !== String(identifiedPerson.id));
           } else {
             // No identified person, use first checked person as selected
             selectedPerson = checkedPersons[0];
-            householdMembers = checkedPersons.slice(1);
+            householdMembers = checkedPersons.slice(1).filter(p => p && p.id !== undefined);
           }
           
           if (!selectedPerson || !selectedPerson.name) return;
@@ -416,28 +448,60 @@ export const ImageAnnotationCanvas = {
         
         // Get checked people for this point label
         const checkedPeople = this.checkedPeopleByPoint && this.checkedPeopleByPoint[point.id] ? this.checkedPeopleByPoint[point.id] : {};
-        const checkedPersonIds = Object.keys(checkedPeople).filter(personId => checkedPeople[personId]);
+        // Normalize keys to handle both string and number IDs
+        const checkedPersonIds = [];
+        Object.keys(checkedPeople).forEach(personId => {
+          if (checkedPeople[personId]) {
+            checkedPersonIds.push(personId);
+          }
+        });
+        
+        // Check if Unknown Person (id 0) is checked - handle both string "0" and number 0
+        const isUnknownPersonChecked = checkedPeople['0'] === true || checkedPeople[0] === true;
+        const isUnknownPerson = identifiedPerson && (identifiedPerson.id === 0 || identifiedPerson.id === '0');
         
         // If there's an identified person, include them even if not explicitly checked
-        if (identifiedPerson && identifiedPerson.id && !checkedPersonIds.includes(identifiedPerson.id)) {
-          checkedPersonIds.push(identifiedPerson.id);
+        // Exception: Unknown Person (id 0) must be explicitly checked to show
+        if (identifiedPerson && identifiedPerson.id !== undefined && identifiedPerson.id !== null) {
+          const idStr = String(identifiedPerson.id);
+          if (!checkedPersonIds.includes(idStr) && !isUnknownPerson) {
+            checkedPersonIds.push(idStr);
+          }
         }
         
-        if (checkedPersonIds.length === 0) return; // No checked people, don't show label
+        if (checkedPersonIds.length === 0 && !isUnknownPersonChecked) return; // No checked people, don't show label
         
         // Get person objects for all checked people
-        const checkedPersons = checkedPersonIds
-          .map(personId => {
-            if (!this.planningCentrePeople) return null;
-            return this.planningCentrePeople.find(p => p.id === personId);
-          })
-          .filter(p => p !== null);
+        const checkedPersons = [];
+        
+        // Handle Unknown Person specially
+        if (isUnknownPersonChecked && isUnknownPerson) {
+          checkedPersons.push(identifiedPerson);
+        }
+        
+        // Handle regular people
+        checkedPersonIds.forEach(personId => {
+          // Skip "0" if we already added Unknown Person
+          if (personId === '0' || personId === 0) {
+            if (!isUnknownPersonChecked || !isUnknownPerson) {
+              return; // Skip if Unknown Person not checked or not identified
+            }
+            return; // Already added above
+          }
+          
+          if (this.planningCentrePeople) {
+            const person = this.planningCentrePeople.find(p => String(p.id) === String(personId));
+            if (person) {
+              checkedPersons.push(person);
+            }
+          }
+        });
         
         if (checkedPersons.length === 0) return;
         
         // Separate selected person from household members
         let selectedPerson = identifiedPerson;
-        let householdMembers = checkedPersons.filter(p => p.id !== identifiedPerson.id);
+        let householdMembers = checkedPersons.filter(p => p && p.id !== undefined && String(p.id) !== String(identifiedPerson.id));
         
         if (!selectedPerson || !selectedPerson.name) return;
         
@@ -603,7 +667,7 @@ export const ImageAnnotationCanvas = {
             
             // Separate selected person from household members
             let selectedPerson = identifiedPerson;
-            let householdMembers = checkedPersons.filter(p => p.id !== identifiedPerson.id);
+            let householdMembers = checkedPersons.filter(p => p && p.id !== undefined && String(p.id) !== String(identifiedPerson.id));
             
             if (!selectedPerson || !selectedPerson.name) return;
             
@@ -1386,22 +1450,54 @@ export const ImageAnnotationCanvas = {
         
         // Get checked people for this bounding box
         const checkedPeople = this.checkedPeopleByBox && this.checkedPeopleByBox[key] ? this.checkedPeopleByBox[key] : {};
-        const checkedPersonIds = Object.keys(checkedPeople).filter(personId => checkedPeople[personId]);
+        // Normalize keys to handle both string and number IDs
+        const checkedPersonIds = [];
+        Object.keys(checkedPeople).forEach(personId => {
+          if (checkedPeople[personId]) {
+            checkedPersonIds.push(personId);
+          }
+        });
+        
+        // Check if Unknown Person (id 0) is checked - handle both string "0" and number 0
+        const isUnknownPersonChecked = checkedPeople['0'] === true || checkedPeople[0] === true;
+        const isUnknownPerson = identifiedPerson && (identifiedPerson.id === 0 || identifiedPerson.id === '0');
         
         // If there's an identified person, include them even if not explicitly checked
-        if (identifiedPerson && identifiedPerson.id && !checkedPersonIds.includes(identifiedPerson.id)) {
-          checkedPersonIds.push(identifiedPerson.id);
+        // Exception: Unknown Person (id 0) must be explicitly checked to show
+        if (identifiedPerson && identifiedPerson.id !== undefined && identifiedPerson.id !== null) {
+          const idStr = String(identifiedPerson.id);
+          if (!checkedPersonIds.includes(idStr) && !isUnknownPerson) {
+            checkedPersonIds.push(idStr);
+          }
         }
         
-        if (checkedPersonIds.length === 0) return; // No checked people, don't show label
+        if (checkedPersonIds.length === 0 && !isUnknownPersonChecked) return; // No checked people, don't show label
         
         // Get person objects for all checked people
-        const checkedPersons = checkedPersonIds
-          .map(personId => {
-            if (!this.planningCentrePeople) return null;
-            return this.planningCentrePeople.find(p => p.id === personId);
-          })
-          .filter(p => p !== null);
+        const checkedPersons = [];
+        
+        // Handle Unknown Person specially
+        if (isUnknownPersonChecked && isUnknownPerson) {
+          checkedPersons.push(identifiedPerson);
+        }
+        
+        // Handle regular people
+        checkedPersonIds.forEach(personId => {
+          // Skip "0" if we already added Unknown Person
+          if (personId === '0' || personId === 0) {
+            if (!isUnknownPersonChecked || !isUnknownPerson) {
+              return; // Skip if Unknown Person not checked or not identified
+            }
+            return; // Already added above
+          }
+          
+          if (this.planningCentrePeople) {
+            const person = this.planningCentrePeople.find(p => String(p.id) === String(personId));
+            if (person) {
+              checkedPersons.push(person);
+            }
+          }
+        });
         
         if (checkedPersons.length === 0) return;
         
@@ -1410,9 +1506,12 @@ export const ImageAnnotationCanvas = {
         let householdMembers = [];
         
         if (identifiedPerson) {
+          // Use identified person as selected person
           selectedPerson = identifiedPerson;
-          householdMembers = checkedPersons.filter(p => p.id !== identifiedPerson.id);
+          // Get household members from checked people (excluding selected person)
+          householdMembers = checkedPersons.filter(p => p && p.id !== undefined && String(p.id) !== String(identifiedPerson.id));
         } else {
+          // No identified person, use first checked person as selected
           selectedPerson = checkedPersons[0];
           householdMembers = checkedPersons.slice(1);
         }

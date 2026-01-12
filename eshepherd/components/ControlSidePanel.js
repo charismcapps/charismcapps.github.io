@@ -79,9 +79,11 @@ export const ControlSidePanel = {
       const { sourceImage, facialArea } = this.selectedKeyBox;
       const key = this.getFaceLabelKey(sourceImage, facialArea);
       const label = key ? this.faceLabels[key] : null;
-      if (label && label.id) {
+      if (label && label.id !== undefined && label.id !== null) {
         const checked = this.checkedPeopleByBox[key];
-        return checked && checked[label.id] ? true : false;
+        // Handle both string and number IDs, including 0
+        const personId = label.id;
+        return checked && (checked[personId] === true || checked[String(personId)] === true);
       }
       return false;
     },
@@ -648,7 +650,7 @@ export const ControlSidePanel = {
               v-for="(guess, index) in faceGuesses"
               :key="guess.person.id || index"
               @click="$emit('select-person', guess.person)"
-              class="px-2 py-1.5 text-xs cursor-pointer border-b border-gray-100 last:border-b-0 hover:bg-blue-50"
+              class="px-2 py-1.5 text-xs cursor-pointer border-b border-gray-100 hover:bg-blue-50"
             >
               <div class="flex items-center justify-between">
                 <div class="flex items-center flex-1 min-w-0">
@@ -660,6 +662,22 @@ export const ControlSidePanel = {
                 <span class="text-gray-600 ml-2 flex-shrink-0">{{ (guess.similarity * 100).toFixed(1) }}%</span>
               </div>
             </div>
+            <!-- Unknown Person Option - Show as last item in top matches -->
+            <div
+              @click="$emit('select-person', { id: 0, name: 'Unknown Person' })"
+              class="px-2 py-1.5 text-xs cursor-pointer border-t border-gray-200 hover:bg-orange-50 bg-orange-50 text-orange-700 font-medium"
+            >
+              Unknown Person
+            </div>
+          </div>
+        </div>
+        <!-- Unknown Person Option - Show when no face guesses but key box is selected -->
+        <div v-if="faceGuesses.length === 0 && !searchQuery && selectedKeyBox !== null && !getCurrentFaceLabel" class="mt-2">
+          <div
+            @click="$emit('select-person', { id: 0, name: 'Unknown Person' })"
+            class="px-2 py-1.5 text-xs cursor-pointer border border-orange-300 rounded-md bg-orange-50 hover:bg-orange-100 text-orange-700 font-medium"
+          >
+            Unknown Person
           </div>
         </div>
         <!-- Search Results -->
@@ -698,7 +716,7 @@ export const ControlSidePanel = {
         </div>
         
         <!-- Embeddings Stored -->
-        <div class="mb-2 px-2 flex items-center justify-between">
+        <div v-if="getCurrentFaceLabel.id !== 0" class="mb-2 px-2 flex items-center justify-between">
           <span class="text-xs text-gray-600">{{ getMatchDisplayText }}</span>
           <button
             @click="$emit('store-embeddings')"
