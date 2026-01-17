@@ -133,6 +133,7 @@
           :planning-centre-people="planningCentrePeople"
           :ensure-url-valid="ensureUrlValid"
           :fetch-model-data="fetchModelData"
+          :labelling-started="labellingStarted"
           @sign-in="signIn"
         @file-change="selectedFile = $event"
         @image-change="selectedImage = $event"
@@ -682,6 +683,9 @@
         onPointLabelCreate(pointData) {
           if (!this.selectedFile) return;
           
+          // Don't allow point label creation if labelling hasn't started
+          if (!this.labellingStarted) return;
+          
           const imageName = this.selectedFile.name;
           if (!this.pointLabels[imageName]) {
             this.pointLabels[imageName] = [];
@@ -713,25 +717,6 @@
           this.searchQuery = '';
           this.searchResults = [];
           this.selectedSearchIndex = -1;
-          
-          // Ensure labelling is started (needed for search box to be visible)
-          if (!this.labellingStarted) {
-            this.labellingStarted = true;
-            this.showFaces = true;
-            // Fetch planning centre people if not already loaded
-            if (!this.planningCentrePeople || this.planningCentrePeople.length === 0) {
-              this.fetchPlanningCentrePeople();
-            }
-          }
-          
-          // Focus the search input - use both $nextTick and setTimeout to ensure DOM is ready
-          this.$nextTick(() => {
-            setTimeout(() => {
-              if (this.$refs.searchInput) {
-                this.$refs.searchInput.focus();
-              }
-            }, 100);
-          });
         },
         onPointLabelClick(pointId) {
           // Toggle selection - if clicking the same point, deselect it
@@ -766,12 +751,7 @@
               this.householdCheckboxes = {};
             }
             
-            // Focus the search input (same as bounding box logic)
-            this.$nextTick(() => {
-              if (this.$refs.searchInput) {
-                this.$refs.searchInput.focus();
-              }
-            });
+            // Focus will be handled by the watcher in ControlSidePanel component
           }
         },
         async onClusterBoxClick(keyBoxData) {

@@ -18,7 +18,8 @@ export const ImageAnnotationCanvas = {
     planningCentrePeople: Array,
     getHouseholdMembers: Function,
     currentFolderFiles: Array,
-    fetchModelData: Function
+    fetchModelData: Function,
+    labellingStarted: Boolean
   },
   emits: [
     'cluster-box-click', // Unified event for cluster key box selection
@@ -1757,8 +1758,8 @@ export const ImageAnnotationCanvas = {
       }
     },
     handleStageMouseMove(event) {
-      // Check if Shift key is pressed
-      if (event.evt.shiftKey) {
+      // Check if Shift key is pressed and labelling has started
+      if (event.evt.shiftKey && this.labellingStarted) {
         const stage = event.target.getStage();
         const pointerPos = stage.getPointerPosition();
         

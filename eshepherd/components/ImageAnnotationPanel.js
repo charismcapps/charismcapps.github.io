@@ -24,7 +24,8 @@ export const ImageAnnotationPanel = {
     checkedPeopleByBox: Object,
     planningCentrePeople: Array,
     ensureUrlValid: Function,
-    fetchModelData: Function
+    fetchModelData: Function,
+    labellingStarted: Boolean
   },
   data() {
     return {
@@ -286,6 +287,7 @@ export const ImageAnnotationPanel = {
               :get-household-members="getHouseholdMembers" 
               :current-folder-files="currentFolderFiles"
               :fetch-model-data="fetchModelData"
+              :labelling-started="labellingStarted"
               @loading-change="$emit('loading-change', $event)"
               @face-box-click="$emit('face-box-click', $event)"
               @cluster-box-click="$emit('cluster-box-click', $event)"

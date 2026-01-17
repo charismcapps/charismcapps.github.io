@@ -519,11 +519,14 @@ export const ControlSidePanel = {
     selectedPointLabelId: {
       handler(newVal) {
         if (newVal !== null && newVal !== undefined) {
+          // Use setTimeout to ensure focus happens after any click events and modifier keys are released
           this.$nextTick(() => {
-            // Focus the search input when selecting a point label
-            if (this.$refs.searchInput) {
-              this.$refs.searchInput.focus();
-            }
+            setTimeout(() => {
+              // Focus the search input when selecting a point label
+              if (this.$refs.searchInput) {
+                this.$refs.searchInput.focus();
+              }
+            }, 50); // Small delay to ensure shift key is released and click event is complete
           });
         }
       },
