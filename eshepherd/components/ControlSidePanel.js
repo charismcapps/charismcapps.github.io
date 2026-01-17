@@ -24,6 +24,7 @@ export const ControlSidePanel = {
     checkInSuccessMessage: String,
     // Additional props needed for component methods
     showFaces: Boolean,
+    showOverlapBoxes: Boolean,
     faceLabels: Object,
     faceScanningStatus: Object,
     faceScanCount: Object,
@@ -471,7 +472,8 @@ export const ControlSidePanel = {
     'toggle-check-in-select-all',
     'check-in-table-checkbox-change',
     'load-face-guesses',
-    'face-guesses-update'
+    'face-guesses-update',
+    'toggle-overlap-boxes'
   ],
   data() {
     return {
@@ -619,6 +621,19 @@ export const ControlSidePanel = {
                 Reload Embeddings
               </button>
             </div>
+          </div>
+          <!-- Show Overlap Boxes Checkbox -->
+          <div v-if="selectedFile && getFaceScanningStatus === 'scanned'" class="mt-2 flex items-center gap-2">
+            <input
+              type="checkbox"
+              :checked="showOverlapBoxes"
+              @change="$emit('toggle-overlap-boxes', $event.target.checked)"
+              id="show-overlap-boxes"
+              class="w-3 h-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+            />
+            <label for="show-overlap-boxes" class="text-xs text-gray-600 cursor-pointer">
+              Show Overlap Boxes
+            </label>
           </div>
         </div>
       </div>

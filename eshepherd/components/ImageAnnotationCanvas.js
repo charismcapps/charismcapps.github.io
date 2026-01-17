@@ -6,6 +6,7 @@ export const ImageAnnotationCanvas = {
     annotations: Array,
     selectedFile: Object,
     showFaces: Boolean,
+    showOverlapBoxes: Boolean,
     faceLabels: Object,
     selectedKeyBox: Object, // Unified selection: { clusterId, sourceFile, embeddingIndex, facialArea, sourceImage, isKeyBoxFromCurrentImage }
     pointLabels: Object,
@@ -342,6 +343,11 @@ export const ImageAnnotationCanvas = {
       }
     },
     pointLabelGroups() {
+      // Return empty array if showFaces is false
+      if (!this.showFaces) {
+        return [];
+      }
+      
       if (!this.selectedFile || !this.pointLabels || !this.imageConfig.image) {
         return [];
       }
@@ -418,6 +424,11 @@ export const ImageAnnotationCanvas = {
       });
     },
     pointNameLabels() {
+      // Return empty array if showFaces is false
+      if (!this.showFaces) {
+        return [];
+      }
+      
       if (!this.selectedFile || !this.pointLabels || !this.pointLabelPersons || !this.imageConfig.image) {
         return [];
       }
@@ -570,6 +581,11 @@ export const ImageAnnotationCanvas = {
     },
     // Get name labels for all point labels (current image AND overlapping images)
     allPointNameLabels() {
+      // Return empty array if showFaces is false
+      if (!this.showFaces) {
+        return [];
+      }
+      
       if (!this.selectedFile || !this.pointLabels || !this.pointLabelPersons || !this.imageConfig.image) {
         return [];
       }
@@ -752,6 +768,11 @@ export const ImageAnnotationCanvas = {
     },
     // Get point labels for current image AND overlapping images
     allPointLabelGroups() {
+      // Return empty array if showFaces is false
+      if (!this.showFaces) {
+        return [];
+      }
+      
       if (!this.selectedFile || !this.pointLabels || !this.imageConfig.image) {
         return [];
       }
@@ -2182,7 +2203,7 @@ export const ImageAnnotationCanvas = {
           <v-rect :config="panTiltZoomConfig.bgRect"></v-rect>
           <v-text :config="panTiltZoomConfig.text"></v-text>
         </v-group>
-        <v-rect v-for="(overlapBox, index) in overlapBoxes" :key="'overlap-' + index" :config="overlapBox"></v-rect>
+        <v-rect v-if="showOverlapBoxes" v-for="(overlapBox, index) in overlapBoxes" :key="'overlap-' + index" :config="overlapBox"></v-rect>
       </v-layer>
     </v-stage>
     <div v-if="showShiftTooltip" :style="{ position: 'absolute', left: tooltipX + 'px', top: tooltipY + 'px', pointerEvents: 'none', zIndex: 1000, backgroundColor: 'rgba(0, 0, 0, 0.8)', color: 'white', padding: '4px 8px', borderRadius: '4px', fontSize: '12px', whiteSpace: 'nowrap' }">

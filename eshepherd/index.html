@@ -70,6 +70,7 @@
           :check-in-error="checkInError"
           :check-in-success-message="checkInSuccessMessage"
           :show-faces="showFaces"
+          :show-overlap-boxes="showOverlapBoxes"
           :face-labels="faceLabels"
           :face-scanning-status="faceScanningStatus"
           :face-scan-count="faceScanCount"
@@ -82,6 +83,7 @@
           :embedding-index="embeddingIndex"
           @session-change="onSessionChange"
           @faces-button-click="handleFacesButtonClick"
+          @toggle-overlap-boxes="showOverlapBoxes = $event"
           @fetch-planning-centre-people="fetchPlanningCentrePeople"
           @reload-embeddings="reloadEmbeddingsIndex"
           @search-input="searchQuery = $event"
@@ -120,6 +122,7 @@
         :selected-overlap-box="selectedOverlapBox"
         :annotations="annotations"
         :show-faces="showFaces"
+        :show-overlap-boxes="showOverlapBoxes"
         :face-labels="faceLabels"
         :point-labels="pointLabels"
         :selected-point-label-id="selectedPointLabelId"
@@ -210,6 +213,7 @@
           bannerVisible: true,
           isSwipe: false,
           showFaces: false,
+          showOverlapBoxes: false, // Control visibility of grey overlap boxes
           labellingStarted: false,
           peopleRetrievalStatus: 'idle', // 'idle', 'retrieving', 'completed'
           peopleRetrievalCount: 0,

@@ -15,6 +15,7 @@ export const ImageAnnotationPanel = {
     selectedKeyBox: Object,
     annotations: Array,
     showFaces: Boolean,
+    showOverlapBoxes: Boolean,
     faceLabels: Object,
     pointLabels: Object,
     selectedPointLabelId: String,
@@ -272,6 +273,7 @@ export const ImageAnnotationPanel = {
               :annotations="annotations" 
               :selected-file="selectedFile" 
               :show-faces="showFaces" 
+              :show-overlap-boxes="showOverlapBoxes"
               :face-labels="faceLabels" 
               :selected-key-box="selectedKeyBox"
               :point-labels="pointLabels" 
