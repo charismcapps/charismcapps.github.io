@@ -52,15 +52,38 @@ export const CheckInOverlay = {
     'error-change',
     'success-message-change'
   ],
+  data() {
+    return {
+      currentCheckIn: null,
+      lastCheckIn: null,
+      unsubscribeCheckIn: null
+    };
+  },
   computed: {
     selectedPersonIds() {
       // Get person IDs from the selection object
       return Object.keys(this.selection).filter(personId => this.selection[personId]);
+    },
+    hasCurrentCheckIn() {
+      return this.currentCheckIn !== null;
     }
+  },
+  watch: {
+    show(newVal) {
+      if (newVal) {
+        this.loadCheckInStatus();
+        this.subscribeToCheckInStatus();
+      } else {
+        this.unsubscribeFromCheckInStatus();
+      }
+    }
+  },
+  beforeUnmount() {
+    this.unsubscribeFromCheckInStatus();
   },
   methods: {
     async performCheckIn() {
-      if (this.submitting) {
+      if (this.submitting || this.hasCurrentCheckIn) {
         return;
       }
       
@@ -77,7 +100,6 @@ export const CheckInOverlay = {
       }
       
       try {
-        this.$emit('submitting-change', true);
         this.$emit('error-change', null);
         this.$emit('success-message-change', '');
         
@@ -86,46 +108,70 @@ export const CheckInOverlay = {
           throw new Error('Planning Center service not available');
         }
         
-        const result = await Services.planningCenter.performCheckIn(this.user, this.selectedPersonIds);
+        // Fire and forget - don't wait for response
+        const result = Services.planningCenter.performCheckIn(this.user, this.selectedPersonIds);
         
         if (result.success) {
-          const successMsg = result.data?.message || 'Check-in request submitted successfully.';
-          this.$emit('success-message-change', successMsg);
-          
-          if (result.data && typeof result.data === 'object') {
-            const {
-              success,
-              total_persons_received,
-              already_checked_in,
-              people_to_update
-            } = result.data;
-            
-            const lines = [];
-            if (typeof success !== 'undefined') {
-              lines.push(`Success: ${success ? 'Yes' : 'No'}`);
-            }
-            if (typeof total_persons_received !== 'undefined') {
-              lines.push(`Total persons received: ${total_persons_received}`);
-            }
-            if (typeof already_checked_in !== 'undefined') {
-              lines.push(`Already checked in: ${already_checked_in}`);
-            }
-            if (typeof people_to_update !== 'undefined') {
-              lines.push(`People to update: ${people_to_update}`);
-            }
-            
-            if (lines.length > 0) {
-              alert(lines.join('\n'));
-            }
-          }
+          this.$emit('success-message-change', 'Check-in request submitted successfully. Processing in background...');
         } else {
-          this.$emit('error-change', result.error || 'Failed to perform check-in.');
+          this.$emit('error-change', result.error || 'Failed to submit check-in request.');
         }
       } catch (error) {
         console.error('Error performing check-in:', error);
         this.$emit('error-change', error.message || 'Failed to perform check-in. Please check your internet connection and try again.');
-      } finally {
-        this.$emit('submitting-change', false);
+      }
+    },
+    async loadCheckInStatus() {
+      const Services = window.Services;
+      if (!Services || !Services.planningCenter) {
+        return;
+      }
+      
+      try {
+        const [current, last] = await Promise.all([
+          Services.planningCenter.getCurrentCheckInStatus(),
+          Services.planningCenter.getLastCheckInStatus()
+        ]);
+        
+        this.currentCheckIn = current;
+        this.lastCheckIn = last;
+      } catch (error) {
+        console.error('Error loading checkin status:', error);
+      }
+    },
+    subscribeToCheckInStatus() {
+      const Services = window.Services;
+      if (!Services || !Services.planningCenter) {
+        return;
+      }
+      
+      this.unsubscribeCheckIn = Services.planningCenter.subscribeToCheckInStatus(({ current, last }) => {
+        // Clear success message when current checkin appears
+        if (current && !this.currentCheckIn) {
+          this.$emit('success-message-change', '');
+        }
+        this.currentCheckIn = current;
+        this.lastCheckIn = last;
+      });
+    },
+    unsubscribeFromCheckInStatus() {
+      if (this.unsubscribeCheckIn) {
+        this.unsubscribeCheckIn();
+        this.unsubscribeCheckIn = null;
+      }
+    },
+    formatTimestamp(timestamp) {
+      if (!timestamp) return '';
+      const date = new Date(timestamp * 1000);
+      return date.toLocaleString();
+    },
+    parseStatus(status) {
+      if (!status) return '';
+      // Remove quotes if present (status is stored as JSON string)
+      try {
+        return JSON.parse(status);
+      } catch (e) {
+        return status.replace(/^"|"$/g, '');
       }
     }
   },
@@ -164,20 +210,40 @@ export const CheckInOverlay = {
           <div class="ml-auto flex items-center gap-2">
             <button
               @click="performCheckIn"
-              :disabled="selectedCount === 0 || submitting"
+              :disabled="selectedCount === 0 || submitting || hasCurrentCheckIn"
               class="px-4 py-2 rounded-md text-sm font-semibold text-white flex items-center gap-2"
-              :class="selectedCount === 0 || submitting ? 'bg-green-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'"
+              :class="selectedCount === 0 || submitting || hasCurrentCheckIn ? 'bg-green-300 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'"
             >
-              <div v-if="submitting" class="spinner-small"></div>
-              <span>{{ submitting ? 'Checking In...' : 'Submit To Planning Center' }}</span>
+              <div v-if="submitting || hasCurrentCheckIn" class="spinner-small"></div>
+              <span>{{ submitting ? 'Submitting...' : (hasCurrentCheckIn ? 'Processing...' : 'Submit To Planning Center') }}</span>
             </button>
           </div>
         </div>
         
-        <div class="px-4 py-2">
+        <div class="px-4 py-2 space-y-2">
           <p v-if="error" class="text-xs text-red-600">{{ error }}</p>
-          <p v-if="successMessage" class="text-xs text-green-600">{{ successMessage }}</p>
+          <p v-if="successMessage && !currentCheckIn" class="text-xs text-green-600">{{ successMessage }}</p>
           <p v-if="totalCount === 0" class="text-xs text-gray-500 mt-1">No people available for check-in yet.</p>
+          
+          <!-- Current Check-in Status -->
+          <div v-if="currentCheckIn" class="bg-blue-50 border border-blue-200 rounded p-2">
+            <div class="text-xs font-semibold text-blue-900 mb-1">Current Check-in Status:</div>
+            <div class="text-xs text-blue-800">
+              <div>Status: {{ parseStatus(currentCheckIn.status) }}</div>
+              <div v-if="currentCheckIn.startedAt">Started: {{ formatTimestamp(currentCheckIn.startedAt) }}</div>
+              <div v-if="currentCheckIn.userId">User: {{ currentCheckIn.userId }}</div>
+            </div>
+          </div>
+          
+          <!-- Last Check-in Status -->
+          <div v-if="lastCheckIn && !currentCheckIn" class="bg-gray-50 border border-gray-200 rounded p-2">
+            <div class="text-xs font-semibold text-gray-700 mb-1">Last Check-in Status:</div>
+            <div class="text-xs text-gray-600">
+              <div>Status: {{ parseStatus(lastCheckIn.status) }}</div>
+              <div v-if="lastCheckIn.endedAt">Ended: {{ formatTimestamp(lastCheckIn.endedAt) }}</div>
+              <div v-if="lastCheckIn.userId">User: {{ lastCheckIn.userId }}</div>
+            </div>
+          </div>
         </div>
         
         <div class="flex-1 px-4 pb-4 w-full">

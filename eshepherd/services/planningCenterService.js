@@ -1,4 +1,6 @@
 // Planning Center service
+import { database } from '../config/firebase.js';
+
 const PLANNING_CENTER_PEOPLE_API = 'https://get-planning-centre-people-g7egpip7ea-as.a.run.app';
 const CHECK_IN_API = 'https://check-in-to-planning-center-g7egpip7ea-as.a.run.app';
 
@@ -53,9 +55,9 @@ export const planningCenterService = {
   },
 
   /**
-   * Perform check-in to Planning Center
+   * Perform check-in to Planning Center (non-blocking, fire and forget)
    */
-  async performCheckIn(user, personIds) {
+  performCheckIn(user, personIds) {
     if (!user) {
       return { success: false, error: 'You must be signed in to perform check-in.' };
     }
@@ -64,52 +66,111 @@ export const planningCenterService = {
       return { success: false, error: 'Select at least one person to check in.' };
     }
     
-    try {
-      const idToken = await user.getIdToken();
-      const payload = {
-        person_ids: personIds,
-        email: user.email,
-        uid: user.uid
-      };
-      
-      let response;
+    // Fire and forget - don't wait for response
+    (async () => {
       try {
-        response = await fetch(CHECK_IN_API, {
+        const idToken = await user.getIdToken();
+        const payload = {
+          person_ids: personIds,
+          email: user.email,
+          uid: user.uid
+        };
+        
+        // Make the API call without waiting for response
+        fetch(CHECK_IN_API, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${idToken}`
           },
           body: JSON.stringify(payload)
+        }).catch(error => {
+          console.error('Error performing check-in (background):', error);
         });
-      } catch (fetchError) {
-        // Handle network errors (connection lost, timeout, etc.)
-        if (fetchError.name === 'TypeError' && (fetchError.message.includes('Failed to fetch') || fetchError.message.includes('Load failed') || fetchError.message.includes('network'))) {
-          return { success: false, error: 'Network connection failed. Please check your internet connection and try again.' };
-        }
-        throw fetchError;
+      } catch (error) {
+        console.error('Error performing check-in (background):', error);
       }
-      
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        let errorMessage = `Check-in failed: ${response.status}`;
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMessage = errorData.error || errorData.message || errorMessage;
-        } catch (e) {
-          if (errorText) {
-            errorMessage = errorText;
-          }
-        }
-        return { success: false, error: errorMessage };
+    })();
+    
+    // Return immediately
+    return { success: true, error: null };
+  },
+
+  /**
+   * Get current checkin status from Firebase
+   */
+  async getCurrentCheckInStatus() {
+    try {
+      if (!database) {
+        return null;
       }
-      
-      const result = await response.json();
-      return { success: true, data: result, error: null };
+      const checkinRef = database.ref('eshepherd/checkin/current');
+      const snapshot = await checkinRef.once('value');
+      return snapshot.val();
     } catch (error) {
-      console.error('Error performing check-in:', error);
-      return { success: false, error: error.message || 'An unexpected error occurred during check-in.' };
+      console.error('Error getting current checkin status:', error);
+      return null;
     }
+  },
+
+  /**
+   * Get last checkin status from Firebase
+   */
+  async getLastCheckInStatus() {
+    try {
+      if (!database) {
+        return null;
+      }
+      const checkinRef = database.ref('eshepherd/checkin/last');
+      const snapshot = await checkinRef.once('value');
+      return snapshot.val();
+    } catch (error) {
+      console.error('Error getting last checkin status:', error);
+      return null;
+    }
+  },
+
+  /**
+   * Subscribe to checkin status changes
+   */
+  subscribeToCheckInStatus(callback) {
+    if (!database) {
+      return () => {}; // Return no-op unsubscribe function
+    }
+    
+    const currentRef = database.ref('eshepherd/checkin/current');
+    const lastRef = database.ref('eshepherd/checkin/last');
+    
+    let currentStatus = null;
+    let lastStatus = null;
+    
+    const updateCallback = () => {
+      callback({ current: currentStatus, last: lastStatus });
+    };
+    
+    const currentCallback = (snapshot) => {
+      currentStatus = snapshot.val();
+      updateCallback();
+    };
+    
+    const lastCallback = (snapshot) => {
+      lastStatus = snapshot.val();
+      updateCallback();
+    };
+    
+    // Load initial values
+    currentRef.once('value', currentCallback);
+    lastRef.once('value', lastCallback);
+    
+    // Subscribe to changes
+    currentRef.on('value', currentCallback);
+    lastRef.on('value', lastCallback);
+    
+    // Return unsubscribe function
+    return () => {
+      currentRef.off('value', currentCallback);
+      lastRef.off('value', lastCallback);
+    };
   },
 
   /**
