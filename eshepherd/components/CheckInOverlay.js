@@ -246,39 +246,41 @@ export const CheckInOverlay = {
           </div>
         </div>
         
-        <div class="flex-1 px-4 pb-4 w-full">
-          <div class="border border-gray-200 rounded-md h-full flex flex-col overflow-hidden bg-white">
+        <div class="flex-1 px-4 pb-4 w-full min-h-0 flex flex-col">
+          <div class="border border-gray-200 rounded-md flex flex-col overflow-hidden bg-white flex-1 min-h-0">
             <div v-if="totalCount === 0" class="flex-1 flex items-center justify-center text-sm text-gray-500">
               Add people from the face labelling panel to prepare check-in.
             </div>
-            <div v-else class="flex-1 overflow-auto">
-              <table class="min-w-full text-sm">
-                <thead class="bg-gray-100 text-gray-600 text-xs uppercase sticky top-0 z-10">
-                  <tr>
-                    <th class="text-left px-3 py-2 w-32">Person ID</th>
-                    <th class="text-left px-3 py-2">Person's Name</th>
-                    <th class="text-center px-3 py-2 w-28">Check In</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="entry in tableData"
-                    :key="entry.person.id"
-                    class="border-b border-gray-100 last:border-b-0"
-                  >
-                    <td class="px-3 py-2 text-xs text-gray-500">{{ entry.person.id }}</td>
-                    <td class="px-3 py-2 text-sm text-gray-800">{{ entry.person.name }}</td>
-                    <td class="px-3 py-2 text-center">
-                      <input
-                        type="checkbox"
-                        :checked="!!selection[entry.person.id]"
-                        @change="$emit('checkbox-change', entry.person.id, $event)"
-                        class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                      />
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div v-else class="flex flex-col flex-1 min-h-0 overflow-hidden">
+              <div class="overflow-y-auto flex-1 min-h-0">
+                <table class="min-w-full text-sm">
+                  <thead class="bg-gray-100 text-gray-600 text-xs uppercase sticky top-0 z-10">
+                    <tr>
+                      <th class="text-left px-3 py-2 w-32">Person ID</th>
+                      <th class="text-left px-3 py-2">Person's Name</th>
+                      <th class="text-center px-3 py-2 w-28">Check In</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="entry in tableData"
+                      :key="entry.person.id"
+                      class="border-b border-gray-100 last:border-b-0"
+                    >
+                      <td class="px-3 py-2 text-xs text-gray-500">{{ entry.person.id }}</td>
+                      <td class="px-3 py-2 text-sm text-gray-800">{{ entry.person.name }}</td>
+                      <td class="px-3 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          :checked="!!selection[entry.person.id]"
+                          @change="$emit('checkbox-change', entry.person.id, $event)"
+                          class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
