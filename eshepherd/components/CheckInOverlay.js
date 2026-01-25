@@ -41,6 +41,10 @@ export const CheckInOverlay = {
     user: {
       type: Object,
       default: null
+    },
+    selectedSessionName: {
+      type: String,
+      default: ''
     }
   },
   emits: [
@@ -109,7 +113,7 @@ export const CheckInOverlay = {
         }
         
         // Fire and forget - don't wait for response
-        const result = Services.planningCenter.performCheckIn(this.user, this.selectedPersonIds);
+        const result = Services.planningCenter.performCheckIn(this.user, this.selectedPersonIds, this.selectedSessionName);
         
         if (result.success) {
           this.$emit('success-message-change', 'Check-in request submitted successfully. Processing in background...');

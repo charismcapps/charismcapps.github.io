@@ -31,6 +31,7 @@ window.Utils = {
   
   // Session utilities
   getSessionValidityRange: sessionUtils.getSessionValidityRange,
+  getSessionService: sessionUtils.getSessionService,
   isSessionValid: sessionUtils.isSessionValid,
   formatLocalDateTimeNoTz: sessionUtils.formatLocalDateTimeNoTz,
   getLocalTimeZoneName: sessionUtils.getLocalTimeZoneName,

@@ -56,14 +56,23 @@ export const planningCenterService = {
 
   /**
    * Perform check-in to Planning Center (non-blocking, fire and forget)
+   * @param {Object} user - The authenticated user
+   * @param {Array} personIds - Array of person IDs to check in
+   * @param {String} sessionName - Session name (e.g., "2025-11-30" or "2025-11-30-SERVICE")
    */
-  performCheckIn(user, personIds) {
+  performCheckIn(user, personIds, sessionName) {
     if (!user) {
       return { success: false, error: 'You must be signed in to perform check-in.' };
     }
     
     if (!personIds || personIds.length === 0) {
       return { success: false, error: 'Select at least one person to check in.' };
+    }
+    
+    // Extract SERVICE from session name if available
+    let service = null;
+    if (sessionName && typeof window !== 'undefined' && window.Utils && window.Utils.getSessionService) {
+      service = window.Utils.getSessionService(sessionName);
     }
     
     // Fire and forget - don't wait for response
@@ -75,6 +84,11 @@ export const planningCenterService = {
           email: user.email,
           uid: user.uid
         };
+        
+        // Add service to payload if it exists
+        if (service) {
+          payload.service = service;
+        }
         
         // Make the API call without waiting for response
         fetch(CHECK_IN_API, {

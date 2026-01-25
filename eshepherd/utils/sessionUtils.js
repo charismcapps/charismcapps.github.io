@@ -2,20 +2,21 @@
 
 /**
  * Get session validity time range in UTC
- * sessionName is assumed to be a date in SGT format (e.g., "2025-11-30")
+ * sessionName is assumed to be a date in SGT format (e.g., "2025-11-30" or "2025-11-30-SERVICE")
  */
 export function getSessionValidityRange(sessionName) {
   if (!sessionName) {
     return null;
   }
   
-  // Parse session date (e.g., "2025-11-30") - this is in SGT
-  const sessionDateMatch = sessionName.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  // Parse session date (e.g., "2025-11-30" or "2025-11-30-SERVICE") - this is in SGT
+  // Supports both YY-MM-DD and YY-MM-DD-SERVICE formats
+  const sessionDateMatch = sessionName.match(/^(\d{4})-(\d{2})-(\d{2})(?:-(.+))?$/);
   if (!sessionDateMatch) {
     return null;
   }
   
-  const [, year, month, day] = sessionDateMatch;
+  const [, year, month, day, service] = sessionDateMatch;
   
   // Session date is in SGT, so we need to:
   // 1. Create a date for the day after session date at 10am SGT
@@ -34,8 +35,28 @@ export function getSessionValidityRange(sessionName) {
   
   return {
     startUtc: validStartUtc,
-    endUtc: validEndUtc
+    endUtc: validEndUtc,
+    service: service || null // Extract SERVICE part, null if not present
   };
+}
+
+/**
+ * Extract service name from session name
+ * Returns the SERVICE part if present, null otherwise
+ * Supports both YY-MM-DD and YY-MM-DD-SERVICE formats
+ */
+export function getSessionService(sessionName) {
+  if (!sessionName) {
+    return null;
+  }
+  
+  // Parse session name to extract SERVICE part (e.g., "2025-11-30-SERVICE" -> "SERVICE")
+  const sessionMatch = sessionName.match(/^\d{4}-\d{2}-\d{2}(?:-(.+))?$/);
+  if (!sessionMatch) {
+    return null;
+  }
+  
+  return sessionMatch[1] || null; // Return SERVICE part or null if not present
 }
 
 /**
