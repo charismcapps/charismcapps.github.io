@@ -134,10 +134,10 @@ export const embeddingService = {
    * Find best match for a query embedding
    * @param {Object} embeddingIndex - The EmbeddingIndex instance
    * @param {Array} queryEmbedding - The query embedding array
-   * @param {number} similarityThreshold - Minimum similarity threshold (default: 0.80)
+   * @param {number} similarityThreshold - Minimum similarity threshold (default: 0.5)
    * @returns {Object|null} - Match object with personId, similarity, and embedding, or null if no match
    */
-  async findBestMatch(embeddingIndex, queryEmbedding, similarityThreshold = 0.80) {
+  async findBestMatch(embeddingIndex, queryEmbedding, similarityThreshold = 0.5) {
     if (!queryEmbedding) {
       console.error('findBestMatch: queryEmbedding is null or undefined');
       return null;

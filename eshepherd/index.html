@@ -242,7 +242,7 @@
           embeddingIndex: null, // EmbeddingIndex from client-vector-search
           ClientVectorSearchModule: null, // Store the imported module
           faceMatchCache: {}, // Cache face matches per image: {imageKey: {embeddingIndex: {personId, similarity, person}}}
-          SIMILARITY_THRESHOLD: 0.80, // Cosine similarity threshold for face matching (0.75 is good for face recognition)
+          SIMILARITY_THRESHOLD: 0.5, // Cosine similarity threshold for face matching
           faceScanningStatus: {}, // Track face scanning status per image: {imageKey: 'scanning' | 'scanned' | null}
           faceScanCount: {}, // Track number of faces scanned per image: {imageKey: number}
           showCheckInOverlay: false, // Control visibility of check-in overlay
