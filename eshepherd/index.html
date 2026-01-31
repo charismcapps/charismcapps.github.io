@@ -795,11 +795,7 @@
             this.selectedPersonChecked = this.isPersonChecked(currentLabel.id);
             this.initializeHouseholdCheckboxes(currentLabel);
             
-            // Reset stored state first
-            const resetKey = this.getFaceLabelKey(sourceImage, facialArea);
-            if (resetKey) {
-              this.embeddingsStored[resetKey] = false;
-            }
+            // Do not reset embeddingsStored here - checkEmbeddingInDB() will set it when the check completes
             
             // Set loading state
             this.checkingEmbeddingInDB = true;
@@ -1269,6 +1265,12 @@
           }
         },
         getEmbeddingsStoredState() {
+          // Use unified key box selection when available
+          if (this.selectedKeyBox) {
+            const { sourceImage, facialArea } = this.selectedKeyBox;
+            const key = this.getFaceLabelKey(sourceImage, facialArea);
+            return key ? (this.embeddingsStored[key] || false) : false;
+          }
           return Utils.getEmbeddingsStoredState(this.selectedFile, this.selectedBoundingBoxIndex, this.embeddingsStored);
         },
         loadEmbeddingData() {
@@ -1356,6 +1358,10 @@
         async handleStoreEmbeddings() {
           const currentLabel = this.getCurrentFaceLabel();
           if (!currentLabel || !currentLabel.id || !this.currentEmbeddingData || !this.user) {
+            return;
+          }
+          // Do not store again if embedding is already saved for this box
+          if (this.getEmbeddingsStoredState()) {
             return;
           }
           
