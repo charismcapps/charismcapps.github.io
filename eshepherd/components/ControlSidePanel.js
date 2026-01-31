@@ -641,8 +641,8 @@ export const ControlSidePanel = {
         </div>
       </div>
       
-      <!-- Face Search Box -->
-      <div v-if="(selectedKeyBox !== null || selectedPointLabelId !== null) && labellingStarted" class="mt-3">
+      <!-- Face Search Box - Only show when no person is selected (uncheck to show search) -->
+      <div v-if="(selectedKeyBox !== null || selectedPointLabelId !== null) && labellingStarted && ((selectedKeyBox !== null && !getCurrentFaceLabel) || (selectedPointLabelId !== null && !getCurrentPointLabel))" class="mt-3">
         <label class="block text-xs font-semibold text-gray-600 mb-2">Search for Person</label>
         <input
           ref="searchInput"
